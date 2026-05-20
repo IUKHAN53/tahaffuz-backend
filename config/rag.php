@@ -7,8 +7,14 @@ return [
         // Separate model for PDF text extraction. flash-lite has a much higher
         // free-tier RPD and is enough for plain text extraction from glyph PDFs.
         'extract_model' => env('GEMINI_EXTRACT_MODEL', 'gemini-2.5-flash-lite'),
-        'embed_model' => env('GEMINI_EMBED_MODEL', 'text-embedding-004'),
+        'embed_model' => env('GEMINI_EMBED_MODEL', 'gemini-embedding-001'),
         'embed_dim' => (int) env('GEMINI_EMBED_DIM', 768),
+        // Chunks per batchEmbedContents call. Hard API ceiling is 100; 50 keeps
+        // each call well under the free-tier tokens-per-minute quota.
+        'embed_batch_size' => (int) env('GEMINI_EMBED_BATCH_SIZE', 50),
+        // Pause between embed batches. 429s are still retried (honoring Gemini's
+        // retryDelay), this just spaces calls out so we hit the cap less often.
+        'embed_inter_batch_ms' => (int) env('GEMINI_EMBED_INTER_BATCH_MS', 1500),
         'base_url' => 'https://generativelanguage.googleapis.com/v1beta',
         'timeout' => 60,
         // Page-range batch size for paged PDF extraction. Keeps each Gemini

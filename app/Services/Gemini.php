@@ -2,8 +2,11 @@
 
 namespace App\Services;
 
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use RuntimeException;
+use Throwable;
 
 class Gemini
 {
@@ -32,17 +35,11 @@ class Gemini
     public function embed(string $text, string $taskType = 'RETRIEVAL_DOCUMENT'): array
     {
         $url = "{$this->baseUrl}/models/{$this->embedModel}:embedContent?key={$this->apiKey}";
-        $resp = Http::timeout($this->timeout)
-            ->retry(2, 500, throw: false)
-            ->post($url, [
-                'content' => ['parts' => [['text' => $text]]],
-                'taskType' => $taskType,
-                'outputDimensionality' => (int) config('rag.gemini.embed_dim', 768),
-            ]);
-
-        if ($resp->failed()) {
-            throw new RuntimeException("Gemini embed failed: HTTP {$resp->status()} {$resp->body()}");
-        }
+        $resp = $this->postWithRetry($url, [
+            'content' => ['parts' => [['text' => $text]]],
+            'taskType' => $taskType,
+            'outputDimensionality' => (int) config('rag.gemini.embed_dim', 768),
+        ]);
 
         $vec = $resp->json('embedding.values');
         if (! is_array($vec) || count($vec) === 0) {
@@ -52,16 +49,127 @@ class Gemini
     }
 
     /**
-     * Embed many strings sequentially. Gemini's batchEmbedContents is supported but this
-     * loop keeps memory steady and lets us retry per-chunk on failure.
+     * Embed many strings via Gemini's batchEmbedContents endpoint. Batching is what
+     * keeps free-tier ingestion under the rate cap — a 150-chunk document becomes a
+     * handful of requests instead of 150. Returned vectors match the input order.
+     *
+     * @param  string[]  $texts
+     * @return array<int, float[]>
      */
     public function embedMany(array $texts, string $taskType = 'RETRIEVAL_DOCUMENT'): array
     {
-        $out = [];
-        foreach ($texts as $t) {
-            $out[] = $this->embed($t, $taskType);
+        if (empty($texts)) {
+            return [];
         }
+
+        $dim = (int) config('rag.gemini.embed_dim', 768);
+        // batchEmbedContents accepts at most 100 requests per call.
+        $batchSize = max(1, min(100, (int) config('rag.gemini.embed_batch_size', 50)));
+        $delayMs = (int) config('rag.gemini.embed_inter_batch_ms', 1500);
+        $url = "{$this->baseUrl}/models/{$this->embedModel}:batchEmbedContents?key={$this->apiKey}";
+
+        $out = [];
+        foreach (array_chunk($texts, $batchSize) as $i => $batch) {
+            if ($i > 0 && $delayMs > 0) {
+                usleep($delayMs * 1000);
+            }
+
+            $requests = array_map(fn ($t) => [
+                'model' => "models/{$this->embedModel}",
+                'content' => ['parts' => [['text' => $t]]],
+                'taskType' => $taskType,
+                'outputDimensionality' => $dim,
+            ], $batch);
+
+            $resp = $this->postWithRetry($url, ['requests' => $requests], 120);
+            $embeddings = $resp->json('embeddings');
+
+            if (! is_array($embeddings) || count($embeddings) !== count($batch)) {
+                throw new RuntimeException(
+                    'Gemini batch embed returned '
+                    .(is_array($embeddings) ? count($embeddings) : 'no')
+                    .' embeddings for '.count($batch).' inputs.'
+                );
+            }
+
+            foreach ($embeddings as $e) {
+                $vec = $e['values'] ?? null;
+                if (! is_array($vec) || count($vec) === 0) {
+                    throw new RuntimeException('Gemini batch embed returned an empty vector.');
+                }
+                $out[] = array_map('floatval', $vec);
+            }
+        }
+
         return $out;
+    }
+
+    /**
+     * POST to Gemini with retry. Honors the server-provided retryDelay on HTTP 429
+     * (free-tier rate limits) and backs off exponentially on 5xx / transport errors.
+     * Non-429 4xx errors are not retried — they won't fix themselves.
+     */
+    protected function postWithRetry(string $url, array $payload, ?int $timeout = null, int $maxAttempts = 6): Response
+    {
+        $timeout ??= $this->timeout;
+        $backoffMs = 2000;
+        $last = null;
+
+        for ($attempt = 1; $attempt <= $maxAttempts; $attempt++) {
+            try {
+                $resp = Http::timeout($timeout)->post($url, $payload);
+            } catch (Throwable $e) {
+                if ($attempt >= $maxAttempts) {
+                    throw new RuntimeException("Gemini request failed (transport): {$e->getMessage()}");
+                }
+                usleep($backoffMs * 1000);
+                $backoffMs = (int) min($backoffMs * 2, 30000);
+                continue;
+            }
+
+            if ($resp->successful()) {
+                return $resp;
+            }
+
+            $last = $resp;
+            $status = $resp->status();
+
+            // Non-429 client errors won't resolve with a retry.
+            if ($status >= 400 && $status < 500 && $status !== 429) {
+                break;
+            }
+            if ($attempt >= $maxAttempts) {
+                break;
+            }
+
+            // On 429, wait exactly as long as Gemini asks (capped); else back off.
+            $serverWaitMs = $status === 429 ? $this->retryDelayMs($resp) : 0;
+            $waitMs = $serverWaitMs > 0 ? min($serverWaitMs, 65000) : $backoffMs;
+            Log::warning('Gemini request retrying', ['status' => $status, 'attempt' => $attempt, 'wait_ms' => $waitMs]);
+            usleep($waitMs * 1000);
+            $backoffMs = (int) min($backoffMs * 2, 30000);
+        }
+
+        $status = $last?->status() ?? 0;
+        $body = $last ? substr($last->body(), 0, 500) : '';
+        throw new RuntimeException("Gemini request failed: HTTP {$status} {$body}");
+    }
+
+    /**
+     * Extract the server's requested retry delay (in ms) from a 429 RetryInfo detail.
+     */
+    protected function retryDelayMs(Response $resp): int
+    {
+        foreach ((array) $resp->json('error.details', []) as $detail) {
+            $type = (string) ($detail['@type'] ?? '');
+            if (str_contains($type, 'RetryInfo') && isset($detail['retryDelay'])) {
+                if (preg_match('/([0-9.]+)s/', (string) $detail['retryDelay'], $m)) {
+                    return (int) ceil(((float) $m[1]) * 1000) + 1000; // +1s cushion
+                }
+            }
+        }
+
+        return 0;
     }
 
     /**

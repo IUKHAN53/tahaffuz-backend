@@ -37,11 +37,27 @@ class Ingestor
             $overlap = (int) config('rag.chunking.overlap', 120);
             $pieces = $this->chunker->chunk($text, $size, $overlap);
 
-            DB::transaction(function () use ($doc, $pieces) {
+            if (empty($pieces)) {
+                throw new \RuntimeException('Chunking produced no usable chunks.');
+            }
+
+            // Embed everything BEFORE touching the DB. Embedding is the slow,
+            // rate-limited part — running it inside the transaction would hold a
+            // SQLite write lock for minutes, and a mid-way 429 would strand the
+            // document half-written. Batch embedding keeps the call count low.
+            $vectors = $this->gemini->embedMany($pieces, 'RETRIEVAL_DOCUMENT');
+
+            if (count($vectors) !== count($pieces)) {
+                throw new \RuntimeException(
+                    'Embedding count mismatch: '.count($vectors).' vectors for '.count($pieces).' chunks.'
+                );
+            }
+
+            DB::transaction(function () use ($doc, $pieces, $vectors) {
                 Chunk::where('document_id', $doc->id)->delete();
 
                 foreach ($pieces as $i => $piece) {
-                    $vec = $this->gemini->embed($piece, 'RETRIEVAL_DOCUMENT');
+                    $vec = $vectors[$i];
                     Chunk::create([
                         'knowledge_base_id' => $doc->knowledge_base_id,
                         'document_id' => $doc->id,
