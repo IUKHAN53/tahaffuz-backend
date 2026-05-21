@@ -7,6 +7,9 @@ use App\Models\Chat;
 use App\Services\Rag\ChatPipeline;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
+use Symfony\Component\HttpFoundation\StreamedResponse;
+use Throwable;
 
 class ChatController extends Controller
 {
@@ -74,7 +77,7 @@ class ChatController extends Controller
             'chat_id' => ['nullable', 'integer'],
             'knowledge_base_id' => ['nullable', 'integer'],
             'message' => ['required', 'string', 'min:1', 'max:4000'],
-            'language' => ['nullable', 'string', 'in:en,ur'],
+            'language' => ['nullable', 'string', 'in:en,ur,rud'],
         ]);
 
         $chat = $this->pipeline->findOrCreateChat(
@@ -83,7 +86,11 @@ class ChatController extends Controller
             $data['chat_id'] ?? null,
         );
 
-        $result = $this->pipeline->answerText($chat, trim($data['message']), $data['language'] ?? null);
+        try {
+            $result = $this->pipeline->answerText($chat, trim($data['message']), $data['language'] ?? null);
+        } catch (Throwable $e) {
+            return $this->serviceError($e, $data['language'] ?? null, $chat->id);
+        }
 
         return response()->json([
             'chat_id' => $chat->id,
@@ -96,6 +103,72 @@ class ChatController extends Controller
         ]);
     }
 
+    /**
+     * Streamed text turn. Emits Server-Sent Events: a `meta` event with the
+     * chat id, a run of `delta` events as the answer is generated, then a
+     * final `done` event (or `error`). The app falls back to /chat/text if
+     * anything here misbehaves, so this path is purely an enhancement.
+     */
+    public function stream(Request $request): StreamedResponse
+    {
+        $data = $request->validate([
+            'device_id' => ['required', 'string', 'min:8', 'max:64'],
+            'chat_id' => ['nullable', 'integer'],
+            'knowledge_base_id' => ['nullable', 'integer'],
+            'message' => ['required', 'string', 'min:1', 'max:4000'],
+            'language' => ['nullable', 'string', 'in:en,ur,rud'],
+        ]);
+
+        $chat = $this->pipeline->findOrCreateChat(
+            $data['device_id'],
+            $data['knowledge_base_id'] ?? null,
+            $data['chat_id'] ?? null,
+        );
+
+        $language = $data['language'] ?? null;
+        $message = trim($data['message']);
+
+        return response()->stream(function () use ($chat, $message, $language) {
+            $send = function (string $event, array $payload): void {
+                echo "event: {$event}\n";
+                echo 'data: '.json_encode($payload, JSON_UNESCAPED_UNICODE)."\n\n";
+                if (ob_get_level() > 0) {
+                    @ob_flush();
+                }
+                flush();
+            };
+
+            $send('meta', ['chat_id' => $chat->id]);
+
+            try {
+                $result = $this->pipeline->answerTextStreamed(
+                    $chat,
+                    $message,
+                    $language,
+                    fn (string $delta) => $send('delta', ['text' => $delta]),
+                );
+
+                $send('done', [
+                    'chat_id' => $chat->id,
+                    'reply' => [
+                        'id' => $result['message']->id,
+                        'content' => $result['message']->content,
+                        'citations' => $result['citations'],
+                        'latency_ms' => $result['message']->latency_ms,
+                    ],
+                ]);
+            } catch (Throwable $e) {
+                Log::error('Chat stream failed', ['chat_id' => $chat->id, 'error' => $e->getMessage()]);
+                $send('error', ['error' => $this->errorMessage($language)]);
+            }
+        }, 200, [
+            'Content-Type' => 'text/event-stream; charset=utf-8',
+            'Cache-Control' => 'no-cache, no-transform',
+            'Connection' => 'keep-alive',
+            'X-Accel-Buffering' => 'no',
+        ]);
+    }
+
     public function audio(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -103,7 +176,7 @@ class ChatController extends Controller
             'chat_id' => ['nullable', 'integer'],
             'knowledge_base_id' => ['nullable', 'integer'],
             'audio' => ['required', 'file', 'mimes:m4a,mp3,mp4,wav,ogg,webm,3gp,aac', 'max:10240'],
-            'language' => ['nullable', 'string', 'in:en,ur'],
+            'language' => ['nullable', 'string', 'in:en,ur,rud'],
         ]);
 
         $chat = $this->pipeline->findOrCreateChat(
@@ -115,7 +188,11 @@ class ChatController extends Controller
         $file = $request->file('audio');
         $mime = $file->getMimeType() ?: 'audio/m4a';
 
-        $result = $this->pipeline->answerAudio($chat, $file->getRealPath(), $mime, $data['language'] ?? null);
+        try {
+            $result = $this->pipeline->answerAudio($chat, $file->getRealPath(), $mime, $data['language'] ?? null);
+        } catch (Throwable $e) {
+            return $this->serviceError($e, $data['language'] ?? null, $chat->id);
+        }
 
         return response()->json([
             'chat_id' => $chat->id,
@@ -127,5 +204,28 @@ class ChatController extends Controller
                 'latency_ms' => $result['message']->latency_ms,
             ],
         ]);
+    }
+
+    /**
+     * Turn an upstream failure (Gemini outage, exhausted quota, etc.) into a
+     * clean localized JSON error the app can show — never a raw 500 stack.
+     */
+    protected function serviceError(Throwable $e, ?string $language, int $chatId): JsonResponse
+    {
+        Log::error('Chat request failed', ['chat_id' => $chatId, 'error' => $e->getMessage()]);
+
+        return response()->json(['error' => $this->errorMessage($language), 'chat_id' => $chatId], 503);
+    }
+
+    /**
+     * Localized "try again" message for upstream failures.
+     */
+    protected function errorMessage(?string $language): string
+    {
+        return match ($language) {
+            'en'  => 'The assistant is busy right now. Please try again in a moment.',
+            'rud' => 'Assistant is waqt mushghool hai. Baraah-e-karam thodi dair baad dobaara koshish karein.',
+            default => 'معاون اس وقت مصروف ہے۔ براہ کرم تھوڑی دیر بعد دوبارہ کوشش کریں۔',
+        };
     }
 }

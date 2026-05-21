@@ -108,9 +108,18 @@ class Gemini
      * POST to Gemini with retry. Honors the server-provided retryDelay on HTTP 429
      * (free-tier rate limits) and backs off exponentially on 5xx / transport errors.
      * Non-429 4xx errors are not retried — they won't fix themselves.
+     *
+     * $maxWaitMs caps how long a single back-off may pause. Ingestion can afford a
+     * patient wait (default 65s); interactive chat calls pass a short cap so a user
+     * never sits behind a multi-minute retry loop.
      */
-    protected function postWithRetry(string $url, array $payload, ?int $timeout = null, int $maxAttempts = 6): Response
-    {
+    protected function postWithRetry(
+        string $url,
+        array $payload,
+        ?int $timeout = null,
+        int $maxAttempts = 6,
+        int $maxWaitMs = 65000,
+    ): Response {
         $timeout ??= $this->timeout;
         $backoffMs = 2000;
         $last = null;
@@ -122,7 +131,7 @@ class Gemini
                 if ($attempt >= $maxAttempts) {
                     throw new RuntimeException("Gemini request failed (transport): {$e->getMessage()}");
                 }
-                usleep($backoffMs * 1000);
+                usleep(min($backoffMs, $maxWaitMs) * 1000);
                 $backoffMs = (int) min($backoffMs * 2, 30000);
                 continue;
             }
@@ -142,9 +151,9 @@ class Gemini
                 break;
             }
 
-            // On 429, wait exactly as long as Gemini asks (capped); else back off.
+            // On 429, wait as long as Gemini asks (capped by $maxWaitMs); else back off.
             $serverWaitMs = $status === 429 ? $this->retryDelayMs($resp) : 0;
-            $waitMs = $serverWaitMs > 0 ? min($serverWaitMs, 65000) : $backoffMs;
+            $waitMs = min($serverWaitMs > 0 ? $serverWaitMs : $backoffMs, $maxWaitMs);
             Log::warning('Gemini request retrying', ['status' => $status, 'attempt' => $attempt, 'wait_ms' => $waitMs]);
             usleep($waitMs * 1000);
             $backoffMs = (int) min($backoffMs * 2, 30000);
@@ -179,6 +188,32 @@ class Gemini
      */
     public function generate(string $systemPrompt, array $history, string $userMessage, string $context): array
     {
+        $url = "{$this->baseUrl}/models/{$this->chatModel}:generateContent?key={$this->apiKey}";
+
+        // Interactive call: a user is waiting, so retry a few times with a short
+        // back-off cap rather than the patient schedule ingestion uses.
+        $resp = $this->postWithRetry(
+            $url,
+            $this->generatePayload($systemPrompt, $history, $userMessage, $context),
+            maxAttempts: 3,
+            maxWaitMs: 8000,
+        );
+
+        $text = $resp->json('candidates.0.content.parts.0.text', '');
+        return [
+            'text' => trim((string) $text),
+            'usage' => $resp->json('usageMetadata', []),
+        ];
+    }
+
+    /**
+     * Build the request body for a grounded chat turn. Shared by generate() and
+     * the streaming endpoint.
+     *
+     * @param  array<int, array{role:string,content:string}>  $history
+     */
+    public function generatePayload(string $systemPrompt, array $history, string $userMessage, string $context): array
+    {
         $contents = [];
 
         foreach ($history as $turn) {
@@ -190,38 +225,151 @@ class Gemini
 
         $contents[] = [
             'role' => 'user',
-            'parts' => [[
-                'text' => "CONTEXT:\n{$context}\n\nسوال: {$userMessage}",
-            ]],
+            'parts' => [['text' => "CONTEXT:\n{$context}\n\nسوال: {$userMessage}"]],
         ];
 
-        $url = "{$this->baseUrl}/models/{$this->chatModel}:generateContent?key={$this->apiKey}";
-        $resp = Http::timeout($this->timeout)
-            ->retry(2, 1000, throw: false)
-            ->post($url, [
-                'systemInstruction' => ['parts' => [['text' => $systemPrompt]]],
-                'contents' => $contents,
-                'generationConfig' => [
-                    'temperature' => 0.2,
-                    'topP' => 0.9,
-                    'maxOutputTokens' => 1024,
-                ],
-            ]);
-
-        if ($resp->failed()) {
-            throw new RuntimeException("Gemini generate failed: HTTP {$resp->status()} {$resp->body()}");
-        }
-
-        $text = $resp->json('candidates.0.content.parts.0.text', '');
         return [
-            'text' => trim((string) $text),
-            'usage' => $resp->json('usageMetadata', []),
+            'systemInstruction' => ['parts' => [['text' => $systemPrompt]]],
+            'contents' => $contents,
+            'generationConfig' => [
+                'temperature' => 0.2,
+                'topP' => 0.9,
+                'maxOutputTokens' => 1024,
+            ],
         ];
     }
 
     /**
-     * Generate from audio input (m4a/wav/mp3/ogg). Gemini 2.5 Flash handles Urdu audio
-     * directly; returns transcript-grounded answer in one call.
+     * Stream a grounded reply token-by-token. Yields plain text deltas as they
+     * arrive from Gemini's Server-Sent Events stream.
+     *
+     * @param  array<int, array{role:string,content:string}>  $history
+     * @return \Generator<int, string>
+     */
+    public function generateStream(string $systemPrompt, array $history, string $userMessage, string $context): \Generator
+    {
+        $url = "{$this->baseUrl}/models/{$this->chatModel}:streamGenerateContent?alt=sse&key={$this->apiKey}";
+        $payload = $this->generatePayload($systemPrompt, $history, $userMessage, $context);
+
+        $resp = Http::timeout($this->timeout)
+            ->withOptions(['stream' => true])
+            ->post($url, $payload);
+
+        if ($resp->failed()) {
+            throw new RuntimeException("Gemini stream failed: HTTP {$resp->status()}");
+        }
+
+        $body = $resp->toPsrResponse()->getBody();
+        $buffer = '';
+
+        while (! $body->eof()) {
+            $chunk = $body->read(8192);
+            if ($chunk === '') {
+                continue;
+            }
+            // Normalize CRLF — Gemini's SSE stream delimits events with \r\n\r\n.
+            $buffer .= str_replace("\r\n", "\n", $chunk);
+
+            // SSE events are separated by a blank line.
+            while (($pos = strpos($buffer, "\n\n")) !== false) {
+                $event = substr($buffer, 0, $pos);
+                $buffer = substr($buffer, $pos + 2);
+                $delta = $this->sseEventText($event);
+                if ($delta !== '') {
+                    yield $delta;
+                }
+            }
+        }
+
+        // Flush any trailing event that arrived without a closing blank line.
+        $delta = $this->sseEventText($buffer);
+        if ($delta !== '') {
+            yield $delta;
+        }
+    }
+
+    /**
+     * Pull the text delta out of a single SSE event block.
+     */
+    protected function sseEventText(string $event): string
+    {
+        $out = '';
+        foreach (explode("\n", $event) as $line) {
+            $line = ltrim($line);
+            if (! str_starts_with($line, 'data:')) {
+                continue;
+            }
+            $json = trim(substr($line, 5));
+            if ($json === '' || $json === '[DONE]') {
+                continue;
+            }
+            $decoded = json_decode($json, true);
+            $out .= $decoded['candidates'][0]['content']['parts'][0]['text'] ?? '';
+        }
+
+        return $out;
+    }
+
+    /**
+     * Transcribe an audio file to text. Urdu / Roman Urdu / English capable.
+     * Routes through the retry layer so a transient 429 no longer 500s the chat.
+     */
+    public function transcribe(string $audioPath, string $audioMime): string
+    {
+        $bytes = @file_get_contents($audioPath);
+        if ($bytes === false) {
+            throw new RuntimeException("Cannot read audio file: {$audioPath}");
+        }
+
+        $model = (string) (config('rag.gemini.transcribe_model') ?: $this->chatModel);
+        $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
+
+        $resp = $this->postWithRetry($url, [
+            'contents' => [[
+                'role' => 'user',
+                'parts' => [
+                    ['text' => 'Transcribe this audio verbatim in its original language '
+                        .'(Urdu script, Roman Urdu, or English). Return ONLY the transcript text, no commentary.'],
+                    ['inlineData' => [
+                        'mimeType' => $this->normalizeAudioMime($audioMime),
+                        'data' => base64_encode($bytes),
+                    ]],
+                ],
+            ]],
+            'generationConfig' => ['temperature' => 0.0, 'maxOutputTokens' => 1024],
+        ], maxAttempts: 3, maxWaitMs: 8000);
+
+        return trim((string) $resp->json('candidates.0.content.parts.0.text', ''));
+    }
+
+    /**
+     * Map whatever MIME the upload arrived with onto a type Gemini accepts.
+     * Expo records m4a (an MP4 container); PHP often reports that as video/mp4.
+     */
+    public function normalizeAudioMime(string $mime): string
+    {
+        $mime = strtolower(trim($mime));
+
+        return match (true) {
+            $mime === '' => 'audio/mp4',
+            str_contains($mime, 'm4a'),
+            str_contains($mime, 'mp4'),
+            str_contains($mime, 'aac'),
+            str_contains($mime, '3gp') => 'audio/mp4',
+            str_contains($mime, 'mp3'),
+            str_contains($mime, 'mpeg') => 'audio/mp3',
+            str_contains($mime, 'wav') => 'audio/wav',
+            str_contains($mime, 'ogg'),
+            str_contains($mime, 'opus') => 'audio/ogg',
+            str_contains($mime, 'flac') => 'audio/flac',
+            default => $mime,
+        };
+    }
+
+    /**
+     * Generate from audio input in one shot (transcript + answer). Kept for
+     * callers that don't need retrieval grounding; the chat pipeline uses the
+     * transcribe-then-generate path instead.
      */
     public function generateFromAudio(string $systemPrompt, string $audioPath, string $audioMime, string $context): array
     {
@@ -229,39 +377,35 @@ class Gemini
         if ($bytes === false) {
             throw new RuntimeException("Cannot read audio file: {$audioPath}");
         }
-        $b64 = base64_encode($bytes);
 
         $url = "{$this->baseUrl}/models/{$this->chatModel}:generateContent?key={$this->apiKey}";
-        $resp = Http::timeout($this->timeout)
-            ->retry(2, 1000, throw: false)
-            ->post($url, [
-                'systemInstruction' => ['parts' => [['text' => $systemPrompt]]],
-                'contents' => [[
-                    'role' => 'user',
-                    'parts' => [
-                        ['text' => "CONTEXT:\n{$context}\n\nصارف کا آڈیو سوال نیچے ہے۔ پہلے اسے سمجھیں، پھر صرف CONTEXT کی بنیاد پر جواب دیں۔"],
-                        ['inlineData' => ['mimeType' => $audioMime, 'data' => $b64]],
-                    ],
-                ]],
-                'generationConfig' => [
-                    'temperature' => 0.2,
-                    'topP' => 0.9,
-                    'maxOutputTokens' => 1024,
-                    'responseMimeType' => 'application/json',
-                    'responseSchema' => [
-                        'type' => 'object',
-                        'properties' => [
-                            'transcript' => ['type' => 'string'],
-                            'answer' => ['type' => 'string'],
-                        ],
-                        'required' => ['transcript', 'answer'],
-                    ],
+        $resp = $this->postWithRetry($url, [
+            'systemInstruction' => ['parts' => [['text' => $systemPrompt]]],
+            'contents' => [[
+                'role' => 'user',
+                'parts' => [
+                    ['text' => "CONTEXT:\n{$context}\n\nصارف کا آڈیو سوال نیچے ہے۔ پہلے اسے سمجھیں، پھر صرف CONTEXT کی بنیاد پر جواب دیں۔"],
+                    ['inlineData' => [
+                        'mimeType' => $this->normalizeAudioMime($audioMime),
+                        'data' => base64_encode($bytes),
+                    ]],
                 ],
-            ]);
-
-        if ($resp->failed()) {
-            throw new RuntimeException("Gemini audio generate failed: HTTP {$resp->status()} {$resp->body()}");
-        }
+            ]],
+            'generationConfig' => [
+                'temperature' => 0.2,
+                'topP' => 0.9,
+                'maxOutputTokens' => 1024,
+                'responseMimeType' => 'application/json',
+                'responseSchema' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'transcript' => ['type' => 'string'],
+                        'answer' => ['type' => 'string'],
+                    ],
+                    'required' => ['transcript', 'answer'],
+                ],
+            ],
+        ], maxAttempts: 3, maxWaitMs: 8000);
 
         $raw = $resp->json('candidates.0.content.parts.0.text', '{}');
         $parsed = json_decode((string) $raw, true) ?: [];

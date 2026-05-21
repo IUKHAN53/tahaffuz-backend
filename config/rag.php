@@ -7,6 +7,9 @@ return [
         // Separate model for PDF text extraction. flash-lite has a much higher
         // free-tier RPD and is enough for plain text extraction from glyph PDFs.
         'extract_model' => env('GEMINI_EXTRACT_MODEL', 'gemini-2.5-flash-lite'),
+        // Model used for voice-message transcription. Defaults to the chat model
+        // for Urdu accuracy; set to flash-lite via env if free-tier quota is tight.
+        'transcribe_model' => env('GEMINI_TRANSCRIBE_MODEL', env('GEMINI_CHAT_MODEL', 'gemini-2.5-flash')),
         'embed_model' => env('GEMINI_EMBED_MODEL', 'gemini-embedding-001'),
         'embed_dim' => (int) env('GEMINI_EMBED_DIM', 768),
         // Chunks per batchEmbedContents call. Hard API ceiling is 100; 50 keeps
@@ -49,12 +52,16 @@ return [
 3. اپنی طرف سے کوئی طبی مشورہ، دوا، خوراک، یا شیڈول ایجاد نہ کریں۔
 4. CONTEXT میں موجود اعداد، تواریخ، اور درجہ حرارت بالکل ویسے ہی نقل کریں جیسے وہاں ہیں۔
 
-جواب کا انداز:
-- مختصر اور سادہ اردو میں۔ ٹیکنیکل اصطلاحات کی وضاحت کریں۔
-- جوابات 3 جملوں سے زیادہ نہ ہوں جب تک ضروری نہ ہو۔
-- اگر سوال انگریزی میں ہو تو انگریزی میں جواب دیں؛ اگر اردو میں ہو تو اردو میں۔
-- جواب میں CONTEXT کے دستاویزات کا حوالہ [DOC: عنوان] کی شکل میں دیں۔
+زبان کا اصول:
+- صارف کے سوال کی زبان اور رسم الخط پہچانیں اور بالکل اسی میں جواب دیں۔
+- انگریزی سوال کا جواب انگریزی میں۔
+- اردو رسم الخط (مثلاً "کولڈ چین کا درجہ حرارت") کا جواب اردو رسم الخط میں۔
+- رومن اردو — یعنی اردو جو لاطینی/انگریزی حروف میں لکھی گئی ہو (مثلاً "cold chain ka temperature kya hona chahiye") — کا جواب رومن اردو میں دیں، اردو رسم الخط میں نہیں۔
 
-CONTEXT کے ٹکڑوں کو "[DOC: عنوان]" کے ساتھ نشان زد کیا گیا ہے۔ جس ٹکڑے سے جواب لیں اسی کا حوالہ دیں۔
+جواب کا انداز:
+- مختصر اور سادہ زبان میں۔ ٹیکنیکل اصطلاحات کی وضاحت کریں۔
+- جوابات 3 جملوں سے زیادہ نہ ہوں جب تک ضروری نہ ہو۔
+
+CONTEXT کے ٹکڑے "[DOC: عنوان]" کے ساتھ نشان زد ہیں — یہ صرف آپ کی اندرونی رہنمائی کے لیے ہے۔ جواب میں کسی دستاویز، ماڈیول، یا "[DOC]" کا نام یا حوالہ شامل نہ کریں؛ صرف سادہ اور براہِ راست معلومات بتائیں۔
 PROMPT,
 ];

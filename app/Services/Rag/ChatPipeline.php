@@ -7,6 +7,7 @@ use App\Models\KnowledgeBase;
 use App\Models\Message;
 use App\Services\Gemini;
 use Illuminate\Support\Str;
+use Throwable;
 
 class ChatPipeline
 {
@@ -42,7 +43,7 @@ class ChatPipeline
     /**
      * Run a text turn end-to-end.
      *
-     * @param  string|null  $language  'en' or 'ur' to force reply language; null = auto-detect.
+     * @param  string|null  $language  'en' | 'ur' | 'rud' preference; null = pure auto-detect.
      * @return array{message: Message, citations: array}
      */
     public function answerText(Chat $chat, string $userText, ?string $language = null): array
@@ -59,8 +60,8 @@ class ChatPipeline
 
         $hits = $this->retrieve($chat->knowledge_base_id, $userText);
 
-        if ($this->isWeak($hits)) {
-            $assistant = $this->refuse($chat, $started, language: $language);
+        if ($this->isWeak($hits, $userText)) {
+            $assistant = $this->refuse($chat, $started, language: $language, userText: $userText);
             return ['message' => $assistant, 'citations' => []];
         }
 
@@ -77,7 +78,7 @@ class ChatPipeline
         $assistant = Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_ASSISTANT,
-            'content' => $reply['text'] !== '' ? $reply['text'] : $this->refusalText($language),
+            'content' => $reply['text'] !== '' ? $reply['text'] : $this->refusalText($language, $userText),
             'citations' => $citations,
             'meta' => ['usage' => $reply['usage'] ?? []] + ($language ? ['language' => $language] : []),
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
@@ -89,15 +90,67 @@ class ChatPipeline
     }
 
     /**
-     * Run an audio turn — Gemini transcribes + answers, but we pre-retrieve context first
-     * by transcribing the audio with a quick text-only call. Simpler: do it in one shot via
-     * generateFromAudio, with context already built from a "best-effort" retrieval that
-     * uses a placeholder query (the audio is sent inline so the model uses the transcript itself).
+     * Streaming variant of answerText. Calls $onDelta(text) for each chunk as it
+     * arrives from Gemini, then persists the completed assistant message.
      *
-     * Trade-off: retrieval can't see the question text up front. Workaround: use the prior
-     * user turn (if any) as an embedding seed; else fall back to embedding KB summary.
-     *
-     * For prototype quality this is acceptable; we can split into transcribe-then-answer later.
+     * @param  callable(string):void  $onDelta
+     * @return array{message: Message, citations: array}
+     */
+    public function answerTextStreamed(Chat $chat, string $userText, ?string $language, callable $onDelta): array
+    {
+        $started = microtime(true);
+
+        Message::create([
+            'chat_id' => $chat->id,
+            'role' => Message::ROLE_USER,
+            'content' => $userText,
+        ]);
+
+        $this->maybeAssignTitle($chat, $userText);
+
+        $hits = $this->retrieve($chat->knowledge_base_id, $userText);
+
+        if ($this->isWeak($hits, $userText)) {
+            $refusal = $this->refusalText($language, $userText);
+            $onDelta($refusal);
+            $assistant = $this->refuse($chat, $started, language: $language, userText: $userText);
+            return ['message' => $assistant, 'citations' => []];
+        }
+
+        [$context, $citations] = $this->buildContext($hits);
+        $history = $this->history($chat, exclude: 1);
+
+        $full = '';
+        try {
+            foreach ($this->gemini->generateStream($this->systemPrompt($language), $history, $userText, $context) as $delta) {
+                $full .= $delta;
+                $onDelta($delta);
+            }
+        } catch (Throwable $e) {
+            // If nothing streamed yet, surface the failure; otherwise keep the
+            // partial answer we already showed the user.
+            if (trim($full) === '') {
+                throw $e;
+            }
+        }
+
+        $full = trim($full);
+        $assistant = Message::create([
+            'chat_id' => $chat->id,
+            'role' => Message::ROLE_ASSISTANT,
+            'content' => $full !== '' ? $full : $this->refusalText($language, $userText),
+            'citations' => $citations,
+            'meta' => ['streamed' => true] + ($language ? ['language' => $language] : []),
+            'latency_ms' => (int) ((microtime(true) - $started) * 1000),
+        ]);
+
+        $chat->touch();
+
+        return ['message' => $assistant, 'citations' => $citations];
+    }
+
+    /**
+     * Run an audio turn: transcribe → embed transcript → retrieve → generate.
      *
      * @return array{message: Message, citations: array, transcript: string}
      */
@@ -105,7 +158,21 @@ class ChatPipeline
     {
         $started = microtime(true);
 
-        $transcript = $this->transcribe($audioPath, $audioMime);
+        $transcript = trim($this->transcribe($audioPath, $audioMime));
+
+        // Nothing intelligible came back (silent clip, mic glitch). Reply with a
+        // gentle prompt to try again instead of embedding an empty query.
+        if (mb_strlen($transcript) < 2) {
+            $assistant = Message::create([
+                'chat_id' => $chat->id,
+                'role' => Message::ROLE_ASSISTANT,
+                'content' => $this->inaudibleText($language),
+                'citations' => [],
+                'meta' => ['source' => 'voice', 'inaudible' => true],
+                'latency_ms' => (int) ((microtime(true) - $started) * 1000),
+            ]);
+            return ['message' => $assistant, 'citations' => [], 'transcript' => ''];
+        }
 
         Message::create([
             'chat_id' => $chat->id,
@@ -118,8 +185,8 @@ class ChatPipeline
 
         $hits = $this->retrieve($chat->knowledge_base_id, $transcript);
 
-        if ($this->isWeak($hits)) {
-            $assistant = $this->refuse($chat, $started, 'voice', language: $language);
+        if ($this->isWeak($hits, $transcript)) {
+            $assistant = $this->refuse($chat, $started, 'voice', language: $language, userText: $transcript);
             return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript];
         }
 
@@ -136,7 +203,7 @@ class ChatPipeline
         $assistant = Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_ASSISTANT,
-            'content' => $reply['text'] !== '' ? $reply['text'] : $this->refusalText($language),
+            'content' => $reply['text'] !== '' ? $reply['text'] : $this->refusalText($language, $transcript),
             'citations' => $citations,
             'meta' => ['usage' => $reply['usage'] ?? [], 'source' => 'voice'] + ($language ? ['language' => $language] : []),
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
@@ -166,21 +233,32 @@ class ChatPipeline
         );
     }
 
-    protected function isWeak(array $hits): bool
+    protected function isWeak(array $hits, string $query): bool
     {
         if (empty($hits)) {
             return true;
         }
+
         $floor = (float) config('rag.retrieval.rrf_floor', 0.012);
+
+        // The corpus is Urdu-script. A query written entirely in Latin letters
+        // (English or Roman Urdu) cannot meaningfully hit the BM25 keyword
+        // index, so only the multilingual vector signal fires. Holding such a
+        // query to the both-signals floor wrongly refuses valid questions, so
+        // relax the floor to a vector-only threshold.
+        if (! preg_match('/\p{Arabic}/u', $query)) {
+            $floor *= 0.6;
+        }
+
         return ($hits[0]['score'] ?? 0.0) < $floor;
     }
 
-    protected function refuse(Chat $chat, float $started, ?string $source = null, ?string $language = null): Message
+    protected function refuse(Chat $chat, float $started, ?string $source = null, ?string $language = null, ?string $userText = null): Message
     {
         return Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_ASSISTANT,
-            'content' => $this->refusalText($language),
+            'content' => $this->refusalText($language, $userText),
             'citations' => [],
             'meta' => ['refused' => true]
                 + ($source ? ['source' => $source] : [])
@@ -190,27 +268,50 @@ class ChatPipeline
     }
 
     /**
-     * Build the system prompt. When $language is set, append a hard rule so the
-     * model ignores the user's input language and always replies in $language.
+     * Build the system prompt. The base prompt already tells the model to match
+     * the user's language and script (English / Urdu / Roman Urdu). $language is
+     * only a *preference* used to break ties when the input language is
+     * ambiguous — it never overrides what the user actually wrote.
      */
     protected function systemPrompt(?string $language): string
     {
         $base = (string) config('rag.system_prompt_ur');
-        if ($language === 'en') {
-            return $base."\n\nLANGUAGE OVERRIDE: Always reply in English, regardless of the language of the question. Translate any Urdu source content into clear English in your answer. Keep numbers, dates, and temperatures exactly as written.";
-        }
-        if ($language === 'ur') {
-            return $base."\n\nLANGUAGE OVERRIDE: ہمیشہ اردو میں جواب دیں چاہے سوال انگریزی میں ہو۔";
-        }
-        return $base;
+
+        return $base.match ($language) {
+            'en'  => "\n\nاگر سوال کی زبان واضح نہ ہو تو انگریزی کو ترجیح دیں۔",
+            'ur'  => "\n\nاگر سوال کی زبان واضح نہ ہو تو اردو رسم الخط کو ترجیح دیں۔",
+            'rud' => "\n\nاگر سوال کی زبان واضح نہ ہو تو رومن اردو کو ترجیح دیں۔",
+            default => '',
+        };
     }
 
-    protected function refusalText(?string $language): string
+    /**
+     * Canned refusal used when retrieval finds nothing useful. Urdu script in
+     * the question always wins; otherwise we fall back to the UI preference.
+     */
+    protected function refusalText(?string $language, ?string $userText = null): string
     {
-        if ($language === 'en') {
-            return "Sorry, I don't have information about that. Please contact your supervisor.";
+        if ($userText !== null && $userText !== '' && preg_match('/\p{Arabic}/u', $userText)) {
+            return 'معذرت، میرے پاس اس بارے میں معلومات نہیں ہیں۔ براہ کرم اپنے سپروائزر سے رابطہ کریں۔';
         }
-        return 'معذرت، میرے پاس اس بارے میں معلومات نہیں ہیں۔ براہ کرم اپنے سپروائزر سے رابطہ کریں۔';
+
+        return match ($language) {
+            'en'  => "Sorry, I don't have information about that. Please contact your supervisor.",
+            'rud' => 'Maazrat, mere paas is baare mein maloomat nahi hain. Baraah-e-karam apne supervisor se rabta karein.',
+            default => 'معذرت، میرے پاس اس بارے میں معلومات نہیں ہیں۔ براہ کرم اپنے سپروائزر سے رابطہ کریں۔',
+        };
+    }
+
+    /**
+     * Shown when a voice message produced no intelligible transcript.
+     */
+    protected function inaudibleText(?string $language): string
+    {
+        return match ($language) {
+            'en'  => "Sorry, I couldn't hear that clearly. Please try recording again.",
+            'rud' => 'Maazrat, awaaz saaf sunai nahi di. Baraah-e-karam dobaara record karein.',
+            default => 'معذرت، آواز واضح سنائی نہیں دی۔ براہ کرم دوبارہ ریکارڈ کریں۔',
+        };
     }
 
     protected function maybeAssignTitle(Chat $chat, string $userText): void
@@ -227,27 +328,10 @@ class ChatPipeline
 
     protected function transcribe(string $audioPath, string $audioMime): string
     {
-        // Use Gemini for transcription — Urdu-capable, free tier.
-        $bytes = file_get_contents($audioPath);
-        if ($bytes === false) {
-            throw new \RuntimeException("Cannot read audio: {$audioPath}");
-        }
-        $cfg = config('rag.gemini');
-        $url = "{$cfg['base_url']}/models/{$cfg['chat_model']}:generateContent?key={$cfg['api_key']}";
-        $resp = \Illuminate\Support\Facades\Http::timeout(60)->retry(2, 1000, throw: false)->post($url, [
-            'contents' => [[
-                'role' => 'user',
-                'parts' => [
-                    ['text' => 'Transcribe this audio verbatim in the original language (Urdu or English). Return ONLY the transcript text, no commentary.'],
-                    ['inlineData' => ['mimeType' => $audioMime, 'data' => base64_encode($bytes)]],
-                ],
-            ]],
-            'generationConfig' => ['temperature' => 0.0, 'maxOutputTokens' => 1024],
-        ]);
-        if ($resp->failed()) {
-            throw new \RuntimeException("Transcription failed: HTTP {$resp->status()}");
-        }
-        return trim((string) $resp->json('candidates.0.content.parts.0.text', ''));
+        // Delegated to the Gemini service so transcription shares the same
+        // 429-aware retry/back-off as every other call — a transient rate
+        // limit no longer surfaces to the app as a 500.
+        return $this->gemini->transcribe($audioPath, $audioMime);
     }
 
     /**
