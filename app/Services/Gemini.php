@@ -415,4 +415,98 @@ class Gemini
             'usage' => $resp->json('usageMetadata', []),
         ];
     }
+
+    /**
+     * Synthesize speech from text via Gemini's TTS model. Returns raw 16-bit
+     * little-endian PCM bytes (mono, at the configured sample rate); the caller
+     * wraps these in a WAV header. Gemini auto-detects the language from the
+     * text, so feed Urdu *script* for an Urdu voice — Roman Urdu must be
+     * transliterated first (see transliterateToUrduScript).
+     */
+    public function synthesizeSpeech(string $text, ?string $voice = null): string
+    {
+        $model = (string) config('rag.gemini.tts_model', 'gemini-2.5-flash-preview-tts');
+        $voice ??= (string) config('rag.gemini.tts_voice', 'Kore');
+        $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
+
+        $resp = $this->postWithRetry($url, [
+            'contents' => [[
+                'role' => 'user',
+                'parts' => [['text' => $text]],
+            ]],
+            'generationConfig' => [
+                'responseModalities' => ['AUDIO'],
+                'speechConfig' => [
+                    'voiceConfig' => [
+                        'prebuiltVoiceConfig' => ['voiceName' => $voice],
+                    ],
+                ],
+            ],
+        ], maxAttempts: 3, maxWaitMs: 8000);
+
+        $b64 = $resp->json('candidates.0.content.parts.0.inlineData.data');
+        if (! is_string($b64) || $b64 === '') {
+            throw new RuntimeException('Gemini TTS returned no audio.');
+        }
+        $pcm = base64_decode($b64, true);
+        if ($pcm === false || $pcm === '') {
+            throw new RuntimeException('Gemini TTS returned undecodable audio.');
+        }
+
+        return $pcm;
+    }
+
+    /**
+     * Wrap raw little-endian 16-bit mono PCM in a minimal WAV (RIFF) header so
+     * it plays in any standard audio player (ExoPlayer on Android included).
+     */
+    public static function pcmToWav(string $pcm, int $sampleRate = 24000, int $channels = 1, int $bitsPerSample = 16): string
+    {
+        $byteRate = (int) ($sampleRate * $channels * ($bitsPerSample / 8));
+        $blockAlign = (int) ($channels * ($bitsPerSample / 8));
+        $dataLen = strlen($pcm);
+
+        $header = 'RIFF'
+            .pack('V', 36 + $dataLen)
+            .'WAVE'
+            .'fmt '
+            .pack('V', 16)              // PCM fmt chunk size
+            .pack('v', 1)               // audio format = PCM
+            .pack('v', $channels)
+            .pack('V', $sampleRate)
+            .pack('V', $byteRate)
+            .pack('v', $blockAlign)
+            .pack('v', $bitsPerSample)
+            .'data'
+            .pack('V', $dataLen);
+
+        return $header.$pcm;
+    }
+
+    /**
+     * Transliterate Roman Urdu (Urdu written in Latin letters) into proper Urdu
+     * (Arabic) script so the TTS voice pronounces it as Urdu, not as English.
+     * Uses the cheap extract model. Falls back to the input on any failure.
+     */
+    public function transliterateToUrduScript(string $text): string
+    {
+        $model = (string) (config('rag.gemini.extract_model') ?: $this->chatModel);
+        $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
+
+        $resp = $this->postWithRetry($url, [
+            'contents' => [[
+                'role' => 'user',
+                'parts' => [['text' =>
+                    'Convert the following Roman Urdu (Urdu written in Latin letters) into natural Urdu '
+                    .'(Arabic) script. Keep any English technical terms as-is. Output ONLY the converted '
+                    ."text, with no quotes or commentary.\n\n".$text,
+                ]],
+            ]],
+            'generationConfig' => ['temperature' => 0.0, 'maxOutputTokens' => 1024],
+        ], maxAttempts: 3, maxWaitMs: 8000);
+
+        $out = trim((string) $resp->json('candidates.0.content.parts.0.text', ''));
+
+        return $out !== '' ? $out : $text;
+    }
 }

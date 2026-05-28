@@ -10,6 +10,13 @@ return [
         // Model used for voice-message transcription. Defaults to the chat model
         // for Urdu accuracy; set to flash-lite via env if free-tier quota is tight.
         'transcribe_model' => env('GEMINI_TRANSCRIBE_MODEL', env('GEMINI_CHAT_MODEL', 'gemini-2.5-flash')),
+        // Text-to-speech model + voice. The 2.5 preview TTS model returns raw
+        // PCM (24kHz, 16-bit, mono) which we wrap as WAV. The voice is
+        // language-agnostic; Gemini speaks whatever script the text is in, so
+        // Roman Urdu is transliterated to Urdu script before synthesis.
+        'tts_model' => env('GEMINI_TTS_MODEL', 'gemini-2.5-flash-preview-tts'),
+        'tts_voice' => env('GEMINI_TTS_VOICE', 'Kore'),
+        'tts_sample_rate' => (int) env('GEMINI_TTS_SAMPLE_RATE', 24000),
         'embed_model' => env('GEMINI_EMBED_MODEL', 'gemini-embedding-001'),
         'embed_dim' => (int) env('GEMINI_EMBED_DIM', 768),
         // Chunks per batchEmbedContents call. Hard API ceiling is 100; 50 keeps
@@ -52,11 +59,12 @@ return [
 3. اپنی طرف سے کوئی طبی مشورہ، دوا، خوراک، یا شیڈول ایجاد نہ کریں۔
 4. CONTEXT میں موجود اعداد، تواریخ، اور درجہ حرارت بالکل ویسے ہی نقل کریں جیسے وہاں ہیں۔
 
-زبان کا اصول:
-- صارف کے سوال کی زبان اور رسم الخط پہچانیں اور بالکل اسی میں جواب دیں۔
+زبان کا اصول (لازمی — کبھی خلاف ورزی نہ کریں):
+- جواب ہمیشہ بالکل اسی زبان اور اسی رسم الخط میں دیں جس میں صارف نے سوال کیا ہے۔
+- اردو رسم الخط میں سوال (مثلاً "کولڈ چین کا درجہ حرارت کتنا ہونا چاہیے؟") کا جواب لازمی طور پر اردو رسم الخط میں دیں — کبھی انگریزی یا رومن اردو میں نہیں۔
 - انگریزی سوال کا جواب انگریزی میں۔
-- اردو رسم الخط (مثلاً "کولڈ چین کا درجہ حرارت") کا جواب اردو رسم الخط میں۔
 - رومن اردو — یعنی اردو جو لاطینی/انگریزی حروف میں لکھی گئی ہو (مثلاً "cold chain ka temperature kya hona chahiye") — کا جواب رومن اردو میں دیں، اردو رسم الخط میں نہیں۔
+- ایک ہی جواب میں رسم الخط نہ ملائیں۔ اگر سوال اردو میں ہے تو پورا جواب اردو میں ہو۔
 
 جواب کا انداز:
 - مختصر اور سادہ زبان میں۔ ٹیکنیکل اصطلاحات کی وضاحت کریں۔

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\ChatController;
+use App\Http\Controllers\Api\TtsController;
 use App\Models\KnowledgeBase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -27,6 +28,10 @@ Route::prefix('chat')->group(function () {
 });
 
 Route::get('/chats', [ChatController::class, 'index'])->middleware('throttle:chat-read');
+
+// Text-to-speech. GET so the app can stream it straight into an audio player.
+// Cached on disk per phrase; cache hits never touch the rate-limited TTS model.
+Route::get('/tts', [TtsController::class, 'speak'])->middleware('throttle:60,1');
 
 Route::get('/user', function (Request $request) {
     return $request->user();
