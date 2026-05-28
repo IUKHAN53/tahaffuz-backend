@@ -42,6 +42,20 @@ return [
         'kw_weight' => (float) env('KW_WEIGHT', 0.45),
         // Below this RRF score, treat retrieval as "no useful context" and refuse.
         'rrf_floor' => (float) env('RRF_FLOOR', 0.012),
+
+        // Full-module context. Instead of feeding 6 scattered chunks, route the
+        // query to the most relevant module(s) and feed each one's FULL text.
+        // The chunks are used only to *rank* which modules matter; the parent
+        // modules' complete content is then sent, up to the token budget.
+        'full_module' => (bool) env('RAG_FULL_MODULE', true),
+        // How many top chunks to consider when ranking modules (routing only).
+        'routing_top_k' => (int) env('RAG_ROUTING_TOP_K', 12),
+        // Total module content fed per query, in (estimated) tokens. The top
+        // module is always included even if it alone exceeds this; further
+        // modules are added greedily only while they still fit.
+        'module_token_budget' => (int) env('RAG_MODULE_TOKEN_BUDGET', 120000),
+        // Hard cap on how many modules can be fed at once.
+        'max_modules' => (int) env('RAG_MAX_MODULES', 3),
     ],
 
     'chunking' => [

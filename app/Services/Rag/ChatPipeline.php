@@ -3,6 +3,7 @@
 namespace App\Services\Rag;
 
 use App\Models\Chat;
+use App\Models\Chunk;
 use App\Models\KnowledgeBase;
 use App\Models\Message;
 use App\Services\Gemini;
@@ -222,11 +223,17 @@ class ChatPipeline
         $queryVec = $this->gemini->embed($query, 'RETRIEVAL_QUERY');
         $cfg = config('rag.retrieval');
 
+        // In full-module mode the hits exist only to rank which modules are
+        // relevant, so pull a wider set than the handful we'd cite directly.
+        $topK = ($cfg['full_module'] ?? true)
+            ? (int) ($cfg['routing_top_k'] ?? 12)
+            : (int) ($cfg['top_k'] ?? 6);
+
         return $this->store->hybridSearch(
             $knowledgeBaseId,
             $queryVec,
             $query,
-            (int) ($cfg['top_k'] ?? 6),
+            $topK,
             (int) ($cfg['candidate_pool'] ?? 24),
             (float) ($cfg['vec_weight'] ?? 0.55),
             (float) ($cfg['kw_weight'] ?? 0.45),
@@ -335,6 +342,11 @@ class ChatPipeline
     }
 
     /**
+     * Build the grounding context from retrieval hits. In full-module mode the
+     * hits route the query to the most relevant module(s) and we feed each
+     * module's FULL text (within a token budget); otherwise we fall back to the
+     * scattered-chunks behaviour.
+     *
      * @param  array<int, array{chunk: \App\Models\Chunk, score: float}>  $hits
      * @return array{0: string, 1: array}
      */
@@ -344,9 +356,102 @@ class ChatPipeline
             return ['', []];
         }
 
+        if (config('rag.retrieval.full_module', true)) {
+            return $this->buildModuleContext($hits);
+        }
+
+        return $this->buildChunkContext($hits);
+    }
+
+    /**
+     * Rank modules by their best-matching chunk, then feed each module's full
+     * text (its chunks in order) until the token budget or module cap is hit.
+     * The top-ranked module is always included even if it alone exceeds the
+     * budget; subsequent modules are added greedily only while they still fit.
+     *
+     * @param  array<int, array{chunk: \App\Models\Chunk, score: float}>  $hits
+     * @return array{0: string, 1: array}
+     */
+    protected function buildModuleContext(array $hits): array
+    {
+        $budget = (int) config('rag.retrieval.module_token_budget', 120000);
+        $maxModules = (int) config('rag.retrieval.max_modules', 3);
+
+        // Best (highest-scoring) hit per module — used both to rank modules and
+        // as the citation snippet for that module.
+        $best = [];
+        foreach ($hits as $hit) {
+            $id = $hit['chunk']->document_id;
+            if (! isset($best[$id]) || $hit['score'] > $best[$id]['score']) {
+                $best[$id] = [
+                    'score' => $hit['score'],
+                    'chunk' => $hit['chunk'],
+                    'title' => $hit['chunk']->document?->title ?? "Doc {$id}",
+                ];
+            }
+        }
+        uasort($best, fn ($a, $b) => $b['score'] <=> $a['score']);
+
         $blocks = [];
         $citations = [];
-        foreach ($hits as $i => $hit) {
+        $usedTokens = 0;
+        foreach ($best as $docId => $info) {
+            if (count($blocks) >= $maxModules) {
+                break;
+            }
+
+            $text = $this->moduleText($docId);
+            if ($text === '') {
+                continue;
+            }
+
+            $tokens = (int) ceil(mb_strlen($text) / 4);
+            // Always seed with the top module; only gate the additions after it.
+            if (! empty($blocks) && $usedTokens + $tokens > $budget) {
+                continue;
+            }
+            $usedTokens += $tokens;
+
+            $blocks[] = "[DOC: {$info['title']}]\n".$text;
+            $citations[] = [
+                'chunk_id' => $info['chunk']->id,
+                'document_id' => $docId,
+                'document_title' => $info['title'],
+                'ordinal' => $info['chunk']->ordinal,
+                'score' => round($info['score'], 4),
+                'snippet' => Str::limit(trim((string) $info['chunk']->content), 240),
+            ];
+        }
+
+        return [implode("\n\n---\n\n", $blocks), $citations];
+    }
+
+    /**
+     * Reconstruct a module's full text from its chunks in document order. The
+     * chunker is paragraph-aware (chunks rarely overlap), so a plain join is
+     * clean enough for grounding context.
+     */
+    protected function moduleText(int $documentId): string
+    {
+        return Chunk::where('document_id', $documentId)
+            ->orderBy('ordinal')
+            ->pluck('content')
+            ->map(fn ($c) => trim((string) $c))
+            ->filter()
+            ->implode("\n\n");
+    }
+
+    /**
+     * Original behaviour: feed each retrieved chunk as its own context block.
+     *
+     * @param  array<int, array{chunk: \App\Models\Chunk, score: float}>  $hits
+     * @return array{0: string, 1: array}
+     */
+    protected function buildChunkContext(array $hits): array
+    {
+        $blocks = [];
+        $citations = [];
+        foreach ($hits as $hit) {
             $chunk = $hit['chunk'];
             $doc = $chunk->document;
             $title = $doc?->title ?? "Doc {$chunk->document_id}";
@@ -360,6 +465,7 @@ class ChatPipeline
                 'snippet' => Str::limit(trim((string) $chunk->content), 240),
             ];
         }
+
         return [implode("\n\n---\n\n", $blocks), $citations];
     }
 
