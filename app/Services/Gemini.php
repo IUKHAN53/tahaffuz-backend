@@ -186,7 +186,7 @@ class Gemini
      *
      * @param  array<int, array{role:string,content:string}>  $history  prior turns (oldest first)
      */
-    public function generate(string $systemPrompt, array $history, string $userMessage, string $context): array
+    public function generate(string $systemPrompt, array $history, string $userMessage, string $context, ?string $replyInstruction = null): array
     {
         $url = "{$this->baseUrl}/models/{$this->chatModel}:generateContent?key={$this->apiKey}";
 
@@ -194,7 +194,7 @@ class Gemini
         // back-off cap rather than the patient schedule ingestion uses.
         $resp = $this->postWithRetry(
             $url,
-            $this->generatePayload($systemPrompt, $history, $userMessage, $context),
+            $this->generatePayload($systemPrompt, $history, $userMessage, $context, $replyInstruction),
             maxAttempts: 3,
             maxWaitMs: 8000,
         );
@@ -212,7 +212,7 @@ class Gemini
      *
      * @param  array<int, array{role:string,content:string}>  $history
      */
-    public function generatePayload(string $systemPrompt, array $history, string $userMessage, string $context): array
+    public function generatePayload(string $systemPrompt, array $history, string $userMessage, string $context, ?string $replyInstruction = null): array
     {
         $contents = [];
 
@@ -223,9 +223,16 @@ class Gemini
             ];
         }
 
+        // The reply-language directive sits LAST, right after the question, so a
+        // large (often Urdu) context block can't drift the answer's language.
+        $tail = "CONTEXT:\n{$context}\n\nسوال: {$userMessage}";
+        if ($replyInstruction !== null && $replyInstruction !== '') {
+            $tail .= "\n\n[{$replyInstruction}]";
+        }
+
         $contents[] = [
             'role' => 'user',
-            'parts' => [['text' => "CONTEXT:\n{$context}\n\nسوال: {$userMessage}"]],
+            'parts' => [['text' => $tail]],
         ];
 
         return [
@@ -246,10 +253,10 @@ class Gemini
      * @param  array<int, array{role:string,content:string}>  $history
      * @return \Generator<int, string>
      */
-    public function generateStream(string $systemPrompt, array $history, string $userMessage, string $context): \Generator
+    public function generateStream(string $systemPrompt, array $history, string $userMessage, string $context, ?string $replyInstruction = null): \Generator
     {
         $url = "{$this->baseUrl}/models/{$this->chatModel}:streamGenerateContent?alt=sse&key={$this->apiKey}";
-        $payload = $this->generatePayload($systemPrompt, $history, $userMessage, $context);
+        $payload = $this->generatePayload($systemPrompt, $history, $userMessage, $context, $replyInstruction);
 
         $resp = Http::timeout($this->timeout)
             ->withOptions(['stream' => true])

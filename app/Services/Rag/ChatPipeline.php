@@ -74,6 +74,7 @@ class ChatPipeline
             $history,
             $userText,
             $context,
+            $this->replyInstruction($userText, $language),
         );
 
         $assistant = Message::create([
@@ -123,7 +124,7 @@ class ChatPipeline
 
         $full = '';
         try {
-            foreach ($this->gemini->generateStream($this->systemPrompt($language), $history, $userText, $context) as $delta) {
+            foreach ($this->gemini->generateStream($this->systemPrompt($language), $history, $userText, $context, $this->replyInstruction($userText, $language)) as $delta) {
                 $full .= $delta;
                 $onDelta($delta);
             }
@@ -199,6 +200,7 @@ class ChatPipeline
             $history,
             $transcript,
             $context,
+            $this->replyInstruction($transcript, $language),
         );
 
         $assistant = Message::create([
@@ -289,6 +291,27 @@ class ChatPipeline
             'ur'  => "\n\nاگر سوال کی زبان واضح نہ ہو تو اردو رسم الخط کو ترجیح دیں۔",
             'rud' => "\n\nاگر سوال کی زبان واضح نہ ہو تو رومن اردو کو ترجیح دیں۔",
             default => '',
+        };
+    }
+
+    /**
+     * A short, mandatory reply-language directive placed right after the
+     * question. With a large (usually Urdu) module in context, a rule buried in
+     * the system prompt isn't enough — the answer drifts toward the context's
+     * language. Urdu-script questions always win; otherwise the UI preference
+     * disambiguates Latin text (English vs Roman Urdu).
+     */
+    protected function replyInstruction(string $userText, ?string $language): string
+    {
+        if (preg_match('/\p{Arabic}/u', $userText)) {
+            return 'جواب لازمی طور پر اردو رسم الخط میں دیں۔';
+        }
+
+        return match ($language) {
+            'ur'  => 'جواب لازمی طور پر اردو رسم الخط میں دیں۔',
+            'rud' => 'Reply ONLY in Roman Urdu (Urdu written with Latin letters), not in Urdu script.',
+            'en'  => 'Reply ONLY in English.',
+            default => 'Reply in the exact same language and script as the question.',
         };
     }
 
