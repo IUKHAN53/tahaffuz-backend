@@ -6,6 +6,7 @@ use App\Models\Chat;
 use App\Models\Chunk;
 use App\Models\KnowledgeBase;
 use App\Models\Message;
+use App\Models\ResponseScript;
 use App\Services\Gemini;
 use App\Services\Pinecone;
 use App\Services\Whisper;
@@ -81,6 +82,21 @@ class ChatPipeline
         ]);
 
         $this->maybeAssignTitle($chat, $userText);
+
+        // Check for introduction/greeting queries
+        $introResponse = $this->maybeIntroduction($userText, $language);
+        if ($introResponse !== null) {
+            $assistant = Message::create([
+                'chat_id' => $chat->id,
+                'role' => Message::ROLE_ASSISTANT,
+                'content' => $introResponse,
+                'citations' => [],
+                'meta' => ['script' => 'introduction'] + ($language ? ['language' => $language] : []),
+                'latency_ms' => (int) ((microtime(true) - $started) * 1000),
+            ]);
+            $chat->touch();
+            return ['message' => $assistant, 'citations' => []];
+        }
 
         $hits = $this->retrieve($chat->knowledge_base_id, $userText);
 
@@ -361,23 +377,32 @@ class ChatPipeline
     }
 
     /**
-     * Canned refusal used when retrieval finds nothing useful. Urdu script in
-     * the question always wins; otherwise we fall back to the UI preference.
+     * Canned refusal used when retrieval finds nothing useful. Checks for admin-
+     * configured script first, then falls back to hardcoded defaults. Urdu script
+     * in the question always wins; otherwise we fall back to the UI preference.
      */
     protected function refusalText(?string $language, ?string $userText = null): string
     {
+        // Detect language from script in user text
+        $detectedLang = $language;
         if ($userText !== null && $userText !== '' && preg_match('/\p{Arabic}/u', $userText)) {
-            // Detect Pashto or Sindhi script patterns
             if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText)) {
-                return 'بخښنه غواړم، زه د دې په اړه معلومات نلرم. مهرباني وکړئ خپل سوپروایزر سره اړیکه ونیسئ.';
+                $detectedLang = 'ps';
+            } elseif (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
+                $detectedLang = 'sd';
+            } else {
+                $detectedLang = 'ur';
             }
-            if (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
-                return 'معاف ڪجو، مون وٽ ان بابت معلومات ناهي. مهرباني ڪري پنهنجي سپروائيزر سان رابطو ڪريو.';
-            }
-            return 'معذرت، میرے پاس اس بارے میں معلومات نہیں ہیں۔ براہ کرم اپنے سپروائزر سے رابطہ کریں۔';
         }
 
-        return match ($language) {
+        // Try to get admin-configured script
+        $script = ResponseScript::getContentFor('no_answer', $detectedLang ?? 'ur');
+        if ($script !== null) {
+            return $script;
+        }
+
+        // Fall back to hardcoded defaults
+        return match ($detectedLang) {
             'en'  => "Sorry, I don't have information about that. Please contact your supervisor.",
             'rud' => 'Maazrat, mere paas is baare mein maloomat nahi hain. Baraah-e-karam apne supervisor se rabta karein.',
             'ps'  => 'بخښنه غواړم، زه د دې په اړه معلومات نلرم. مهرباني وکړئ خپل سوپروایزر سره اړیکه ونیسئ.',
@@ -391,6 +416,13 @@ class ChatPipeline
      */
     protected function inaudibleText(?string $language): string
     {
+        // Try to get admin-configured script
+        $script = ResponseScript::getContentFor('inaudible', $language ?? 'ur');
+        if ($script !== null) {
+            return $script;
+        }
+
+        // Fall back to hardcoded defaults
         return match ($language) {
             'en'  => "Sorry, I couldn't hear that clearly. Please try recording again.",
             'rud' => 'Maazrat, awaaz saaf sunai nahi di. Baraah-e-karam dobaara record karein.',
@@ -410,6 +442,56 @@ class ChatPipeline
         if ($title !== '') {
             $chat->update(['title' => $title]);
         }
+    }
+
+    /**
+     * Check if the query is asking for an introduction/greeting and return
+     * the configured script if available. Returns null if not an intro query.
+     */
+    protected function maybeIntroduction(string $userText, ?string $language): ?string
+    {
+        $text = mb_strtolower(trim($userText));
+
+        // Common introduction patterns in various languages
+        $introPatterns = [
+            // English
+            '/^(who are you|what are you|introduce yourself|tell me about yourself|what is tahaffuz|what is this|hello|hi|hey|assalam)/i',
+            // Urdu/Arabic script
+            '/^(تم کون ہو|آپ کون ہیں|تعارف|اپنا تعارف|تحفظ کیا ہے|السلام علیکم|سلام)/u',
+            // Roman Urdu
+            '/^(tum kaun ho|aap kaun hain|taaruf|apna taaruf|tahaffuz kya hai|assalam|salam)/i',
+            // Pashto
+            '/^(ته څوک یې|تاسو څوک یاست|ځان معرفي کړئ)/u',
+            // Sindhi
+            '/^(توهان ڪير آهيو|پاڻ جو تعارف)/u',
+        ];
+
+        $isIntro = false;
+        foreach ($introPatterns as $pattern) {
+            if (preg_match($pattern, $text)) {
+                $isIntro = true;
+                break;
+            }
+        }
+
+        if (! $isIntro) {
+            return null;
+        }
+
+        // Detect language from script
+        $detectedLang = $language;
+        if (preg_match('/\p{Arabic}/u', $userText)) {
+            if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText)) {
+                $detectedLang = 'ps';
+            } elseif (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
+                $detectedLang = 'sd';
+            } else {
+                $detectedLang = 'ur';
+            }
+        }
+
+        // Try to get admin-configured introduction script
+        return ResponseScript::getContentFor('introduction', $detectedLang ?? 'ur');
     }
 
     protected function transcribe(string $audioPath, string $audioMime): string
