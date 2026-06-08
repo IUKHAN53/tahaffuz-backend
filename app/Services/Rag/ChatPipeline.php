@@ -75,6 +75,10 @@ class ChatPipeline
     {
         $started = microtime(true);
 
+        // Detect the actual language from user's text - this overrides app preference
+        // so answers match the language the question was asked in
+        $effectiveLanguage = $this->detectLanguage($userText, $language);
+
         Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_USER,
@@ -84,14 +88,14 @@ class ChatPipeline
         $this->maybeAssignTitle($chat, $userText);
 
         // Check for introduction/greeting queries
-        $introResponse = $this->maybeIntroduction($userText, $language);
+        $introResponse = $this->maybeIntroduction($userText, $effectiveLanguage);
         if ($introResponse !== null) {
             $assistant = Message::create([
                 'chat_id' => $chat->id,
                 'role' => Message::ROLE_ASSISTANT,
                 'content' => $introResponse,
                 'citations' => [],
-                'meta' => ['script' => 'introduction'] + ($language ? ['language' => $language] : []),
+                'meta' => ['script' => 'introduction', 'language' => $effectiveLanguage],
                 'latency_ms' => (int) ((microtime(true) - $started) * 1000),
             ]);
             $chat->touch();
@@ -101,7 +105,7 @@ class ChatPipeline
         $hits = $this->retrieve($chat->knowledge_base_id, $userText);
 
         if ($this->isWeak($hits, $userText)) {
-            $assistant = $this->refuse($chat, $started, language: $language, userText: $userText);
+            $assistant = $this->refuse($chat, $started, language: $effectiveLanguage, userText: $userText);
             return ['message' => $assistant, 'citations' => []];
         }
 
@@ -109,19 +113,19 @@ class ChatPipeline
         $history = $this->history($chat, exclude: 1);
 
         $reply = $this->gemini->generate(
-            $this->systemPrompt($language),
+            $this->systemPrompt($effectiveLanguage),
             $history,
             $userText,
             $context,
-            $this->replyInstruction($userText, $language),
+            $this->replyInstruction($userText, $effectiveLanguage),
         );
 
         $assistant = Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_ASSISTANT,
-            'content' => $reply['text'] !== '' ? $reply['text'] : $this->refusalText($language, $userText),
+            'content' => $reply['text'] !== '' ? $reply['text'] : $this->refusalText($effectiveLanguage, $userText),
             'citations' => $citations,
-            'meta' => ['usage' => $reply['usage'] ?? []] + ($language ? ['language' => $language] : []),
+            'meta' => ['usage' => $reply['usage'] ?? [], 'language' => $effectiveLanguage],
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
         ]);
 
@@ -141,6 +145,9 @@ class ChatPipeline
     {
         $started = microtime(true);
 
+        // Detect the actual language from user's text
+        $effectiveLanguage = $this->detectLanguage($userText, $language);
+
         Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_USER,
@@ -152,9 +159,9 @@ class ChatPipeline
         $hits = $this->retrieve($chat->knowledge_base_id, $userText);
 
         if ($this->isWeak($hits, $userText)) {
-            $refusal = $this->refusalText($language, $userText);
+            $refusal = $this->refusalText($effectiveLanguage, $userText);
             $onDelta($refusal);
-            $assistant = $this->refuse($chat, $started, language: $language, userText: $userText);
+            $assistant = $this->refuse($chat, $started, language: $effectiveLanguage, userText: $userText);
             return ['message' => $assistant, 'citations' => []];
         }
 
@@ -163,7 +170,7 @@ class ChatPipeline
 
         $full = '';
         try {
-            foreach ($this->gemini->generateStream($this->systemPrompt($language), $history, $userText, $context, $this->replyInstruction($userText, $language)) as $delta) {
+            foreach ($this->gemini->generateStream($this->systemPrompt($effectiveLanguage), $history, $userText, $context, $this->replyInstruction($userText, $effectiveLanguage)) as $delta) {
                 $full .= $delta;
                 $onDelta($delta);
             }
@@ -179,9 +186,9 @@ class ChatPipeline
         $assistant = Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_ASSISTANT,
-            'content' => $full !== '' ? $full : $this->refusalText($language, $userText),
+            'content' => $full !== '' ? $full : $this->refusalText($effectiveLanguage, $userText),
             'citations' => $citations,
-            'meta' => ['streamed' => true] + ($language ? ['language' => $language] : []),
+            'meta' => ['streamed' => true, 'language' => $effectiveLanguage],
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
         ]);
 
@@ -215,6 +222,9 @@ class ChatPipeline
             return ['message' => $assistant, 'citations' => [], 'transcript' => ''];
         }
 
+        // Detect the actual language from the transcript
+        $effectiveLanguage = $this->detectLanguage($transcript, $language);
+
         Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_USER,
@@ -227,7 +237,7 @@ class ChatPipeline
         $hits = $this->retrieve($chat->knowledge_base_id, $transcript);
 
         if ($this->isWeak($hits, $transcript)) {
-            $assistant = $this->refuse($chat, $started, 'voice', language: $language, userText: $transcript);
+            $assistant = $this->refuse($chat, $started, 'voice', language: $effectiveLanguage, userText: $transcript);
             return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript];
         }
 
@@ -235,19 +245,19 @@ class ChatPipeline
         $history = $this->history($chat, exclude: 1);
 
         $reply = $this->gemini->generate(
-            $this->systemPrompt($language),
+            $this->systemPrompt($effectiveLanguage),
             $history,
             $transcript,
             $context,
-            $this->replyInstruction($transcript, $language),
+            $this->replyInstruction($transcript, $effectiveLanguage),
         );
 
         $assistant = Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_ASSISTANT,
-            'content' => $reply['text'] !== '' ? $reply['text'] : $this->refusalText($language, $transcript),
+            'content' => $reply['text'] !== '' ? $reply['text'] : $this->refusalText($effectiveLanguage, $transcript),
             'citations' => $citations,
-            'meta' => ['usage' => $reply['usage'] ?? [], 'source' => 'voice'] + ($language ? ['language' => $language] : []),
+            'meta' => ['usage' => $reply['usage'] ?? [], 'source' => 'voice', 'language' => $effectiveLanguage],
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
         ]);
 
@@ -442,6 +452,37 @@ class ChatPipeline
         if ($title !== '') {
             $chat->update(['title' => $title]);
         }
+    }
+
+    /**
+     * Detect the language from the user's text. Script-based detection takes
+     * priority over the app preference, ensuring answers match the language
+     * the question was asked in.
+     *
+     * Priority:
+     * 1. Pashto script (has unique characters like ټډړږښځڅېګڼ)
+     * 2. Sindhi script (has unique characters like ڳڻڪھڀٺٽ)
+     * 3. Urdu script (Arabic script without Pashto/Sindhi markers)
+     * 4. App preference (for Latin text: en vs rud)
+     */
+    protected function detectLanguage(string $userText, ?string $appLanguage): string
+    {
+        // Check for Arabic script (includes Urdu, Pashto, Sindhi)
+        if (preg_match('/\p{Arabic}/u', $userText)) {
+            // Pashto-specific characters
+            if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText)) {
+                return 'ps';
+            }
+            // Sindhi-specific characters
+            if (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
+                return 'sd';
+            }
+            // Default Arabic script = Urdu
+            return 'ur';
+        }
+
+        // Latin text - use app preference to distinguish English vs Roman Urdu
+        return $appLanguage ?? 'ur';
     }
 
     /**
