@@ -345,13 +345,16 @@ class ChatPipeline
      */
     protected function systemPrompt(?string $language): string
     {
+        $basePrompt = (string) config('rag.system_prompt_ur');
+
         // Use dedicated prompts for Pashto and Sindhi to ensure proper translation
         return match ($language) {
-            'ps'  => (string) config('rag.system_prompt_ps', config('rag.system_prompt_ur')),
-            'sd'  => (string) config('rag.system_prompt_sd', config('rag.system_prompt_ur')),
-            'en'  => (string) config('rag.system_prompt_ur') . "\n\nIMPORTANT: The user is asking in English. Respond in clear, natural English. Do NOT translate word-by-word from Urdu - understand the content and explain it naturally in English.",
-            'rud' => (string) config('rag.system_prompt_ur') . "\n\nIMPORTANT: User is writing in Roman Urdu (Urdu with Latin letters). Reply in Roman Urdu only, not Urdu script.",
-            default => (string) config('rag.system_prompt_ur'),
+            'ps'  => (string) config('rag.system_prompt_ps', $basePrompt),
+            'sd'  => (string) config('rag.system_prompt_sd', $basePrompt),
+            'en'  => $basePrompt . "\n\nIMPORTANT: The user is asking in English. Respond in clear, natural English. Do NOT translate word-by-word from Urdu - understand the content and explain it naturally in English.",
+            'rud' => $basePrompt . "\n\nIMPORTANT: User is writing in Roman Urdu (Urdu with Latin letters). Reply in Roman Urdu only, not Urdu script.",
+            'auto' => $basePrompt . "\n\nIMPORTANT: Detect the language of the user's question and respond in that SAME language. The knowledge base is in Urdu, so understand the Urdu content first, then formulate a natural response in the user's language. Do NOT translate word-by-word - provide natural, fluent responses. Supported languages include but are not limited to: Farsi/Persian, Punjabi, Arabic, Hindi, Turkish, Bengali, and others.",
+            default => $basePrompt,
         };
     }
 
@@ -382,6 +385,7 @@ class ChatPipeline
             'en'  => 'Reply ONLY in English.',
             'ps'  => 'جواب باید په پښتو کې وي.',
             'sd'  => 'جواب سنڌيءَ ۾ هجڻ گهرجي.',
+            'auto' => 'CRITICAL: Detect the language of the question above and reply in that EXACT same language and script. Do not reply in Urdu unless the question is in Urdu.',
             default => 'Reply in the exact same language and script as the question.',
         };
     }
@@ -417,6 +421,8 @@ class ChatPipeline
             'rud' => 'Maazrat, mere paas is baare mein maloomat nahi hain. Baraah-e-karam apne supervisor se rabta karein.',
             'ps'  => 'بخښنه غواړم، زه د دې په اړه معلومات نلرم. مهرباني وکړئ خپل سوپروایزر سره اړیکه ونیسئ.',
             'sd'  => 'معاف ڪجو، مون وٽ ان بابت معلومات ناهي. مهرباني ڪري پنهنجي سپروائيزر سان رابطو ڪريو.',
+            // For auto-detected languages, use English as it's widely understood
+            'auto' => "Sorry, I don't have information about that. Please contact your supervisor.",
             default => 'معذرت، میرے پاس اس بارے میں معلومات نہیں ہیں۔ براہ کرم اپنے سپروائزر سے رابطہ کریں۔',
         };
     }
@@ -438,6 +444,7 @@ class ChatPipeline
             'rud' => 'Maazrat, awaaz saaf sunai nahi di. Baraah-e-karam dobaara record karein.',
             'ps'  => 'بخښنه، زه دا روښانه واورېدلی نه شم. مهرباني وکړئ بیا ریکارډ کړئ.',
             'sd'  => 'معاف ڪجو، مان اهو صاف ٻڌي نه سگهيس. مهرباني ڪري ٻيهر رڪارڊ ڪريو.',
+            'auto' => "Sorry, I couldn't hear that clearly. Please try recording again.",
             default => 'معذرت، آواز واضح سنائی نہیں دی۔ براہ کرم دوبارہ ریکارڈ کریں۔',
         };
     }
@@ -462,12 +469,14 @@ class ChatPipeline
      * Priority:
      * 1. Pashto script (has unique characters like ټډړږښځڅېګڼ)
      * 2. Sindhi script (has unique characters like ڳڻڪھڀٺٽ)
-     * 3. Urdu script (Arabic script without Pashto/Sindhi markers)
-     * 4. App preference (for Latin text: en vs rud)
+     * 3. Other Arabic scripts (Farsi, Punjabi Shahmukhi, Arabic, etc.) → 'auto'
+     * 4. Urdu script (if app preference is ur)
+     * 5. App preference (for Latin text: en vs rud)
+     * 6. Other scripts (Cyrillic, Devanagari, CJK, etc.) → 'auto'
      */
     protected function detectLanguage(string $userText, ?string $appLanguage): string
     {
-        // Check for Arabic script (includes Urdu, Pashto, Sindhi)
+        // Check for Arabic script (includes Urdu, Pashto, Sindhi, Farsi, Arabic, Punjabi Shahmukhi)
         if (preg_match('/\p{Arabic}/u', $userText)) {
             // Pashto-specific characters
             if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText)) {
@@ -477,8 +486,40 @@ class ChatPipeline
             if (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
                 return 'sd';
             }
-            // Default Arabic script = Urdu
-            return 'ur';
+            // Farsi/Persian-specific characters (پ چ ژ گ are shared, but these combinations help)
+            // Farsi uses ی instead of ے, and has unique word patterns
+            // For now, if app is set to Urdu, assume Urdu; otherwise let LLM auto-detect
+            if ($appLanguage === 'ur') {
+                return 'ur';
+            }
+            // Could be Farsi, Arabic, Punjabi Shahmukhi - let LLM auto-detect
+            return 'auto';
+        }
+
+        // Check for other non-Latin scripts - let LLM auto-detect
+        // Devanagari (Hindi, Sanskrit, Marathi)
+        if (preg_match('/\p{Devanagari}/u', $userText)) {
+            return 'auto';
+        }
+        // Gurmukhi (Punjabi)
+        if (preg_match('/\p{Gurmukhi}/u', $userText)) {
+            return 'auto';
+        }
+        // Bengali
+        if (preg_match('/\p{Bengali}/u', $userText)) {
+            return 'auto';
+        }
+        // Tamil
+        if (preg_match('/\p{Tamil}/u', $userText)) {
+            return 'auto';
+        }
+        // Cyrillic (Russian, etc.)
+        if (preg_match('/\p{Cyrillic}/u', $userText)) {
+            return 'auto';
+        }
+        // CJK (Chinese, Japanese, Korean)
+        if (preg_match('/[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]/u', $userText)) {
+            return 'auto';
         }
 
         // Latin text - use app preference to distinguish English vs Roman Urdu
