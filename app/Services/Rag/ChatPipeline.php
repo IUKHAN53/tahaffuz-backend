@@ -7,15 +7,38 @@ use App\Models\Chunk;
 use App\Models\KnowledgeBase;
 use App\Models\Message;
 use App\Services\Gemini;
+use App\Services\Pinecone;
+use App\Services\Whisper;
 use Illuminate\Support\Str;
 use Throwable;
 
 class ChatPipeline
 {
+    protected ?PineconeVectorStore $pineconeStore = null;
+    protected ?Whisper $whisper = null;
+
     public function __construct(
         protected Gemini $gemini,
         protected VectorStore $store,
-    ) {}
+    ) {
+        // Initialize Pinecone if configured
+        if (config('rag.providers.vector_store') === 'pinecone' && config('services.pinecone.api_key')) {
+            try {
+                $this->pineconeStore = new PineconeVectorStore(app(Pinecone::class));
+            } catch (Throwable $e) {
+                // Pinecone not available, fall back to hybrid search
+            }
+        }
+
+        // Initialize Whisper if configured
+        if (config('rag.providers.stt') === 'whisper' && config('services.openai.api_key')) {
+            try {
+                $this->whisper = app(Whisper::class);
+            } catch (Throwable $e) {
+                // Whisper not available, fall back to Gemini
+            }
+        }
+    }
 
     public function findOrCreateChat(string $deviceId, ?int $kbId = null, ?int $chatId = null): Chat
     {
@@ -231,6 +254,20 @@ class ChatPipeline
             ? (int) ($cfg['routing_top_k'] ?? 12)
             : (int) ($cfg['top_k'] ?? 6);
 
+        // Use Pinecone if available for faster semantic search
+        if ($this->pineconeStore !== null) {
+            try {
+                return $this->pineconeStore->search(
+                    $knowledgeBaseId,
+                    $queryVec,
+                    $topK,
+                    (float) ($cfg['min_score'] ?? 0.55)
+                );
+            } catch (Throwable $e) {
+                // Fall back to hybrid search if Pinecone fails
+            }
+        }
+
         return $this->store->hybridSearch(
             $knowledgeBaseId,
             $queryVec,
@@ -290,6 +327,8 @@ class ChatPipeline
             'en'  => "\n\nاگر سوال کی زبان واضح نہ ہو تو انگریزی کو ترجیح دیں۔",
             'ur'  => "\n\nاگر سوال کی زبان واضح نہ ہو تو اردو رسم الخط کو ترجیح دیں۔",
             'rud' => "\n\nاگر سوال کی زبان واضح نہ ہو تو رومن اردو کو ترجیح دیں۔",
+            'ps'  => "\n\nکه پوښتنه په پښتو ده، جواب باید په پښتو کې وي.",
+            'sd'  => "\n\nجيڪڏهن سوال سنڌيءَ ۾ آهي، جواب سنڌيءَ ۾ ڏيو.",
             default => '',
         };
     }
@@ -304,6 +343,14 @@ class ChatPipeline
     protected function replyInstruction(string $userText, ?string $language): string
     {
         if (preg_match('/\p{Arabic}/u', $userText)) {
+            // Detect Pashto-specific characters
+            if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText)) {
+                return 'جواب باید په پښتو کې وي.';
+            }
+            // Detect Sindhi-specific characters
+            if (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
+                return 'جواب سنڌيءَ ۾ هجڻ گهرجي.';
+            }
             return 'جواب لازمی طور پر اردو رسم الخط میں دیں۔';
         }
 
@@ -311,6 +358,8 @@ class ChatPipeline
             'ur'  => 'جواب لازمی طور پر اردو رسم الخط میں دیں۔',
             'rud' => 'Reply ONLY in Roman Urdu (Urdu written with Latin letters), not in Urdu script.',
             'en'  => 'Reply ONLY in English.',
+            'ps'  => 'جواب باید په پښتو کې وي.',
+            'sd'  => 'جواب سنڌيءَ ۾ هجڻ گهرجي.',
             default => 'Reply in the exact same language and script as the question.',
         };
     }
@@ -322,12 +371,21 @@ class ChatPipeline
     protected function refusalText(?string $language, ?string $userText = null): string
     {
         if ($userText !== null && $userText !== '' && preg_match('/\p{Arabic}/u', $userText)) {
+            // Detect Pashto or Sindhi script patterns
+            if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText)) {
+                return 'بخښنه غواړم، زه د دې په اړه معلومات نلرم. مهرباني وکړئ خپل سوپروایزر سره اړیکه ونیسئ.';
+            }
+            if (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
+                return 'معاف ڪجو، مون وٽ ان بابت معلومات ناهي. مهرباني ڪري پنهنجي سپروائيزر سان رابطو ڪريو.';
+            }
             return 'معذرت، میرے پاس اس بارے میں معلومات نہیں ہیں۔ براہ کرم اپنے سپروائزر سے رابطہ کریں۔';
         }
 
         return match ($language) {
             'en'  => "Sorry, I don't have information about that. Please contact your supervisor.",
             'rud' => 'Maazrat, mere paas is baare mein maloomat nahi hain. Baraah-e-karam apne supervisor se rabta karein.',
+            'ps'  => 'بخښنه غواړم، زه د دې په اړه معلومات نلرم. مهرباني وکړئ خپل سوپروایزر سره اړیکه ونیسئ.',
+            'sd'  => 'معاف ڪجو، مون وٽ ان بابت معلومات ناهي. مهرباني ڪري پنهنجي سپروائيزر سان رابطو ڪريو.',
             default => 'معذرت، میرے پاس اس بارے میں معلومات نہیں ہیں۔ براہ کرم اپنے سپروائزر سے رابطہ کریں۔',
         };
     }
@@ -340,6 +398,8 @@ class ChatPipeline
         return match ($language) {
             'en'  => "Sorry, I couldn't hear that clearly. Please try recording again.",
             'rud' => 'Maazrat, awaaz saaf sunai nahi di. Baraah-e-karam dobaara record karein.',
+            'ps'  => 'بخښنه، زه دا روښانه واورېدلی نه شم. مهرباني وکړئ بیا ریکارډ کړئ.',
+            'sd'  => 'معاف ڪجو، مان اهو صاف ٻڌي نه سگهيس. مهرباني ڪري ٻيهر رڪارڊ ڪريو.',
             default => 'معذرت، آواز واضح سنائی نہیں دی۔ براہ کرم دوبارہ ریکارڈ کریں۔',
         };
     }
@@ -358,6 +418,16 @@ class ChatPipeline
 
     protected function transcribe(string $audioPath, string $audioMime): string
     {
+        // Use Whisper if available for better multilingual transcription
+        if ($this->whisper !== null) {
+            try {
+                $result = $this->whisper->transcribe($audioPath);
+                return $result['text'] ?? '';
+            } catch (Throwable $e) {
+                // Fall back to Gemini if Whisper fails
+            }
+        }
+
         // Delegated to the Gemini service so transcription shares the same
         // 429-aware retry/back-off as every other call — a transient rate
         // limit no longer surfaces to the app as a 500.

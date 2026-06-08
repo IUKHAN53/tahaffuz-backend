@@ -2,6 +2,9 @@
 
 namespace App\Providers;
 
+use App\Services\ElevenLabs;
+use App\Services\Pinecone;
+use App\Services\Whisper;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\RateLimiter;
@@ -14,7 +17,28 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // Register Pinecone as singleton (only if configured)
+        $this->app->singleton(Pinecone::class, function () {
+            return new Pinecone(
+                config('services.pinecone.api_key'),
+                config('services.pinecone.host'),
+                config('services.pinecone.index')
+            );
+        });
+
+        // Register Whisper as singleton (only if configured)
+        $this->app->singleton(Whisper::class, function () {
+            return new Whisper(config('services.openai.api_key'));
+        });
+
+        // Register ElevenLabs as singleton (only if configured)
+        $this->app->singleton(ElevenLabs::class, function () {
+            return new ElevenLabs(
+                config('services.elevenlabs.api_key'),
+                config('services.elevenlabs.voice_id'),
+                config('services.elevenlabs.model')
+            );
+        });
     }
 
     /**

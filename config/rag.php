@@ -1,6 +1,13 @@
 <?php
 
 return [
+    // Provider selection: 'gemini' or 'pinecone' for vectors, 'gemini' or 'whisper' for STT, 'gemini' or 'elevenlabs' for TTS
+    'providers' => [
+        'vector_store' => env('RAG_VECTOR_PROVIDER', 'gemini'),  // 'gemini' (hybrid) or 'pinecone'
+        'stt' => env('RAG_STT_PROVIDER', 'gemini'),              // 'gemini' or 'whisper'
+        'tts' => env('RAG_TTS_PROVIDER', 'gemini'),              // 'gemini' or 'elevenlabs'
+    ],
+
     'gemini' => [
         'api_key' => env('GEMINI_API_KEY'),
         'chat_model' => env('GEMINI_CHAT_MODEL', 'gemini-2.5-flash'),
