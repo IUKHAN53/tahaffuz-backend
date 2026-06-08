@@ -314,22 +314,18 @@ class ChatPipeline
     }
 
     /**
-     * Build the system prompt. The base prompt already tells the model to match
-     * the user's language and script (English / Urdu / Roman Urdu). $language is
-     * only a *preference* used to break ties when the input language is
-     * ambiguous — it never overrides what the user actually wrote.
+     * Build the system prompt. Uses language-specific prompts for Pashto/Sindhi
+     * to ensure natural translation from the Urdu knowledge base, not word-by-word.
      */
     protected function systemPrompt(?string $language): string
     {
-        $base = (string) config('rag.system_prompt_ur');
-
-        return $base.match ($language) {
-            'en'  => "\n\nاگر سوال کی زبان واضح نہ ہو تو انگریزی کو ترجیح دیں۔",
-            'ur'  => "\n\nاگر سوال کی زبان واضح نہ ہو تو اردو رسم الخط کو ترجیح دیں۔",
-            'rud' => "\n\nاگر سوال کی زبان واضح نہ ہو تو رومن اردو کو ترجیح دیں۔",
-            'ps'  => "\n\nکه پوښتنه په پښتو ده، جواب باید په پښتو کې وي.",
-            'sd'  => "\n\nجيڪڏهن سوال سنڌيءَ ۾ آهي، جواب سنڌيءَ ۾ ڏيو.",
-            default => '',
+        // Use dedicated prompts for Pashto and Sindhi to ensure proper translation
+        return match ($language) {
+            'ps'  => (string) config('rag.system_prompt_ps', config('rag.system_prompt_ur')),
+            'sd'  => (string) config('rag.system_prompt_sd', config('rag.system_prompt_ur')),
+            'en'  => (string) config('rag.system_prompt_ur') . "\n\nIMPORTANT: The user is asking in English. Respond in clear, natural English. Do NOT translate word-by-word from Urdu - understand the content and explain it naturally in English.",
+            'rud' => (string) config('rag.system_prompt_ur') . "\n\nIMPORTANT: User is writing in Roman Urdu (Urdu with Latin letters). Reply in Roman Urdu only, not Urdu script.",
+            default => (string) config('rag.system_prompt_ur'),
         };
     }
 
