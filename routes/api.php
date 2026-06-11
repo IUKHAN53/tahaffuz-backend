@@ -1,6 +1,11 @@
 <?php
 
+use App\Http\Controllers\Api\BookmarkController;
 use App\Http\Controllers\Api\ChatController;
+use App\Http\Controllers\Api\FeedbackController;
+use App\Http\Controllers\Api\PushTokenController;
+use App\Http\Controllers\Api\QuickAnswersController;
+use App\Http\Controllers\Api\SearchController;
 use App\Http\Controllers\Api\TtsController;
 use App\Models\KnowledgeBase;
 use Illuminate\Http\Request;
@@ -36,3 +41,33 @@ Route::get('/tts', [TtsController::class, 'speak'])->middleware('throttle:60,1')
 Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
+
+// Feedback endpoints
+Route::prefix('feedback')->middleware('throttle:60,1')->group(function () {
+    Route::post('/', [FeedbackController::class, 'store']);
+    Route::get('/{messageId}', [FeedbackController::class, 'show']);
+    Route::get('/{messageId}/check', [FeedbackController::class, 'check']);
+});
+
+// Bookmark endpoints
+Route::prefix('bookmarks')->middleware('throttle:60,1')->group(function () {
+    Route::get('/', [BookmarkController::class, 'index']);
+    Route::post('/toggle', [BookmarkController::class, 'toggle']);
+    Route::get('/{messageId}/check', [BookmarkController::class, 'check']);
+    Route::delete('/{bookmarkId}', [BookmarkController::class, 'destroy']);
+});
+
+// Search endpoints
+Route::prefix('search')->middleware('throttle:30,1')->group(function () {
+    Route::get('/messages', [SearchController::class, 'messages']);
+});
+
+// Offline quick answers (cached Q&A pairs)
+Route::get('/quick-answers', [QuickAnswersController::class, 'index'])->middleware('throttle:10,1');
+
+// Push notification endpoints
+Route::prefix('push')->middleware('throttle:30,1')->group(function () {
+    Route::post('/register', [PushTokenController::class, 'register']);
+    Route::post('/preferences', [PushTokenController::class, 'updatePreferences']);
+    Route::post('/unregister', [PushTokenController::class, 'unregister']);
+});
