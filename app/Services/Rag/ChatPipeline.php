@@ -10,6 +10,7 @@ use App\Models\ResponseScript;
 use App\Services\Gemini;
 use App\Services\Pinecone;
 use App\Services\Whisper;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
 use Throwable;
 
@@ -79,6 +80,10 @@ class ChatPipeline
         // so answers match the language the question was asked in
         $effectiveLanguage = $this->detectLanguage($userText, $language);
 
+        // First turn of a chat? Answers don't depend on history then, so they
+        // are safe to serve from / store into the shared answer cache.
+        $isFirstTurn = ! $chat->messages()->exists();
+
         Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_USER,
@@ -102,6 +107,21 @@ class ChatPipeline
             return ['message' => $assistant, 'citations' => []];
         }
 
+        // Serve a cached answer for repeated first-turn questions (suggestion
+        // cards and FAQs) — skips embed + retrieval + generation entirely.
+        if ($cached = $this->cachedAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn)) {
+            $assistant = Message::create([
+                'chat_id' => $chat->id,
+                'role' => Message::ROLE_ASSISTANT,
+                'content' => $cached['content'],
+                'citations' => $cached['citations'],
+                'meta' => ['cached' => true, 'language' => $effectiveLanguage],
+                'latency_ms' => (int) ((microtime(true) - $started) * 1000),
+            ]);
+            $chat->touch();
+            return ['message' => $assistant, 'citations' => $cached['citations']];
+        }
+
         $hits = $this->retrieve($chat->knowledge_base_id, $userText);
 
         if ($this->isWeak($hits, $userText)) {
@@ -119,6 +139,10 @@ class ChatPipeline
             $context,
             $this->replyInstruction($userText, $effectiveLanguage),
         );
+
+        if ($reply['text'] !== '') {
+            $this->storeAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn, $reply['text'], $citations);
+        }
 
         $assistant = Message::create([
             'chat_id' => $chat->id,
@@ -148,6 +172,8 @@ class ChatPipeline
         // Detect the actual language from user's text
         $effectiveLanguage = $this->detectLanguage($userText, $language);
 
+        $isFirstTurn = ! $chat->messages()->exists();
+
         Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_USER,
@@ -155,6 +181,37 @@ class ChatPipeline
         ]);
 
         $this->maybeAssignTitle($chat, $userText);
+
+        // Greetings/intro questions answer from the script, not retrieval.
+        $introResponse = $this->maybeIntroduction($userText, $effectiveLanguage);
+        if ($introResponse !== null) {
+            $onDelta($introResponse);
+            $assistant = Message::create([
+                'chat_id' => $chat->id,
+                'role' => Message::ROLE_ASSISTANT,
+                'content' => $introResponse,
+                'citations' => [],
+                'meta' => ['script' => 'introduction', 'language' => $effectiveLanguage, 'streamed' => true],
+                'latency_ms' => (int) ((microtime(true) - $started) * 1000),
+            ]);
+            $chat->touch();
+            return ['message' => $assistant, 'citations' => []];
+        }
+
+        // Cached first-turn answer: emit it as a single delta — instant reply.
+        if ($cached = $this->cachedAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn)) {
+            $onDelta($cached['content']);
+            $assistant = Message::create([
+                'chat_id' => $chat->id,
+                'role' => Message::ROLE_ASSISTANT,
+                'content' => $cached['content'],
+                'citations' => $cached['citations'],
+                'meta' => ['cached' => true, 'language' => $effectiveLanguage, 'streamed' => true],
+                'latency_ms' => (int) ((microtime(true) - $started) * 1000),
+            ]);
+            $chat->touch();
+            return ['message' => $assistant, 'citations' => $cached['citations']];
+        }
 
         $hits = $this->retrieve($chat->knowledge_base_id, $userText);
 
@@ -169,11 +226,13 @@ class ChatPipeline
         $history = $this->history($chat, exclude: 1);
 
         $full = '';
+        $completed = false;
         try {
             foreach ($this->gemini->generateStream($this->systemPrompt($effectiveLanguage), $history, $userText, $context, $this->replyInstruction($userText, $effectiveLanguage)) as $delta) {
                 $full .= $delta;
                 $onDelta($delta);
             }
+            $completed = true;
         } catch (Throwable $e) {
             // If nothing streamed yet, surface the failure; otherwise keep the
             // partial answer we already showed the user.
@@ -183,6 +242,12 @@ class ChatPipeline
         }
 
         $full = trim($full);
+        // Only cache answers that streamed to completion — a partial answer
+        // must never become the canonical cached reply.
+        if ($completed && $full !== '') {
+            $this->storeAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn, $full, $citations);
+        }
+
         $assistant = Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_ASSISTANT,
@@ -234,6 +299,21 @@ class ChatPipeline
 
         $this->maybeAssignTitle($chat, $transcript);
 
+        // Spoken greetings/intro questions answer from the script, not retrieval.
+        $introResponse = $this->maybeIntroduction($transcript, $effectiveLanguage);
+        if ($introResponse !== null) {
+            $assistant = Message::create([
+                'chat_id' => $chat->id,
+                'role' => Message::ROLE_ASSISTANT,
+                'content' => $introResponse,
+                'citations' => [],
+                'meta' => ['script' => 'introduction', 'language' => $effectiveLanguage, 'source' => 'voice'],
+                'latency_ms' => (int) ((microtime(true) - $started) * 1000),
+            ]);
+            $chat->touch();
+            return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript];
+        }
+
         $hits = $this->retrieve($chat->knowledge_base_id, $transcript);
 
         if ($this->isWeak($hits, $transcript)) {
@@ -267,6 +347,51 @@ class ChatPipeline
     }
 
     /**
+     * Normalized cache key for a first-turn answer: same KB + same language +
+     * same question (whitespace/case-folded) → same reply.
+     */
+    protected function answerCacheKey(int $knowledgeBaseId, string $userText, string $language): string
+    {
+        $normalized = mb_strtolower(trim((string) preg_replace('/\s+/u', ' ', $userText)));
+
+        return "answer:{$knowledgeBaseId}:{$language}:".md5($normalized);
+    }
+
+    /**
+     * Fetch a cached first-turn answer, or null. Cached answers are only used
+     * on a chat's first turn, where no history can change the reply.
+     *
+     * @return array{content: string, citations: array}|null
+     */
+    protected function cachedAnswer(Chat $chat, string $userText, string $language, bool $isFirstTurn): ?array
+    {
+        if (! $isFirstTurn || ! config('rag.cache.enabled', true)) {
+            return null;
+        }
+
+        $cached = Cache::get($this->answerCacheKey($chat->knowledge_base_id, $userText, $language));
+
+        return is_array($cached) && isset($cached['content']) ? $cached : null;
+    }
+
+    /**
+     * Store a successful first-turn answer for reuse. Refusals are never cached
+     * (the knowledge base may grow) and follow-up turns depend on history.
+     */
+    protected function storeAnswer(Chat $chat, string $userText, string $language, bool $isFirstTurn, string $content, array $citations): void
+    {
+        if (! $isFirstTurn || ! config('rag.cache.enabled', true)) {
+            return;
+        }
+
+        Cache::put(
+            $this->answerCacheKey($chat->knowledge_base_id, $userText, $language),
+            ['content' => $content, 'citations' => $citations],
+            (int) config('rag.cache.answer_ttl', 21600),
+        );
+    }
+
+    /**
      * @return array<int, array{chunk: \App\Models\Chunk, score: float, vec_score?: float, kw_score?: float}>
      */
     protected function retrieve(int $knowledgeBaseId, string $query): array
@@ -282,12 +407,21 @@ class ChatPipeline
 
         // Use Pinecone if available for faster semantic search
         if ($this->pineconeStore !== null) {
+            $minScore = (float) ($cfg['min_score'] ?? 0.55);
+            // Cross-lingual queries (Latin text against the Urdu corpus) score
+            // lower on cosine similarity than same-script queries; holding them
+            // to the same threshold wrongly refuses valid English/Roman-Urdu
+            // questions. Mirrors the BM25 relaxation in isWeak().
+            if (! preg_match('/\p{Arabic}/u', $query)) {
+                $minScore *= 0.75;
+            }
+
             try {
                 return $this->pineconeStore->search(
                     $knowledgeBaseId,
                     $queryVec,
                     $topK,
-                    (float) ($cfg['min_score'] ?? 0.55)
+                    $minScore
                 );
             } catch (Throwable $e) {
                 // Fall back to hybrid search if Pinecone fails
@@ -534,25 +668,35 @@ class ChatPipeline
     {
         $text = mb_strtolower(trim($userText));
 
-        // Common introduction patterns in various languages
-        $introPatterns = [
-            // English
-            '/^(who are you|what are you|introduce yourself|tell me about yourself|what is tahaffuz|what is this|hello|hi|hey|assalam)/i',
-            // Urdu/Arabic script
-            '/^(تم کون ہو|آپ کون ہیں|تعارف|اپنا تعارف|تحفظ کیا ہے|السلام علیکم|سلام)/u',
-            // Roman Urdu
-            '/^(tum kaun ho|aap kaun hain|taaruf|apna taaruf|tahaffuz kya hai|assalam|salam)/i',
-            // Pashto
+        // Identity questions — a prefix match is safe ("who are you exactly?").
+        $identityPatterns = [
+            '/^(who are you|what are you|introduce yourself|tell me about yourself|what is tahaffuz|what is this)\b/i',
+            '/^(تم کون ہو|آپ کون ہیں|تعارف|اپنا تعارف|تحفظ کیا ہے)/u',
+            '/^(tum kaun ho|aap kaun hain|taaruf|apna taaruf|tahaffuz kya hai)\b/i',
             '/^(ته څوک یې|تاسو څوک یاست|ځان معرفي کړئ)/u',
-            // Sindhi
             '/^(توهان ڪير آهيو|پاڻ جو تعارف)/u',
         ];
 
+        // Bare greetings — must be the ENTIRE message, otherwise "Assalam,
+        // polio vaccine kab lagti hai?" would get the intro instead of an answer.
+        $greetingPatterns = [
+            '/^(hello|hi|hey|salam|(assalam|asalam)([\s\-]*o[\s\-]*alaikum|u[\s\-]*alaikum)?|assalamualaikum)[\s!.،؟?]*$/iu',
+            '/^(السلام علیکم(\s*ورحمۃ اللہ(\s*وبرکاتہ)?)?|سلام|اسلام علیکم)[\s!.،؟?]*$/u',
+        ];
+
         $isIntro = false;
-        foreach ($introPatterns as $pattern) {
+        foreach ($identityPatterns as $pattern) {
             if (preg_match($pattern, $text)) {
                 $isIntro = true;
                 break;
+            }
+        }
+        if (! $isIntro) {
+            foreach ($greetingPatterns as $pattern) {
+                if (preg_match($pattern, $text)) {
+                    $isIntro = true;
+                    break;
+                }
             }
         }
 
@@ -572,8 +716,24 @@ class ChatPipeline
             }
         }
 
-        // Try to get admin-configured introduction script
-        return ResponseScript::getContentFor('introduction', $detectedLang ?? 'ur');
+        // Admin-configured script wins; otherwise fall back to a built-in
+        // introduction so greetings never hit the refusal path.
+        return ResponseScript::getContentFor('introduction', $detectedLang ?? 'ur')
+            ?? $this->defaultIntroduction($detectedLang ?? 'ur');
+    }
+
+    /**
+     * Built-in introduction used when no admin script is configured.
+     */
+    protected function defaultIntroduction(string $language): string
+    {
+        return match ($language) {
+            'en'  => "Hello! I am Tahaffuz, your EPI training assistant. I can answer questions about vaccines, the cold chain, and immunization schedules. How can I help you today?",
+            'rud' => 'Assalam-o-Alaikum! Main Tahaffuz hoon, aapka EPI training assistant. Main vaccine, cold chain, aur immunization schedule ke baare mein sawalon ka jawab de sakta hoon. Aaj main aapki kaise madad karoon?',
+            'ps'  => 'سلام! زه "تحفظ" یم، ستاسو د EPI روزنې مرستندویه. زه د واکسینونو، کولډ چین، او د واکسینیشن مهالویش په اړه پوښتنو ته ځواب ورکولی شم. نن څنګه مرسته وکړم؟',
+            'sd'  => 'السلام عليڪم! مان "تحفظ" آهيان، توهان جو EPI ٽريننگ اسسٽنٽ. مان ويڪسين، ڪولڊ چين، ۽ واڪسينيشن شيڊول بابت سوالن جا جواب ڏئي سگهان ٿو. اڄ ڪيئن مدد ڪريان؟',
+            default => 'السلام علیکم! میں "تحفظ" ہوں — آپ کا EPI ٹریننگ معاون۔ میں ویکسین، کولڈ چین، اور حفاظتی ٹیکوں کے شیڈول کے بارے میں سوالات کا جواب دے سکتا ہوں۔ آج میں آپ کی کیسے مدد کروں؟',
+        };
     }
 
     protected function transcribe(string $audioPath, string $audioMime): string
@@ -682,9 +842,22 @@ class ChatPipeline
     /**
      * Reconstruct a module's full text from its chunks in document order. The
      * chunker is paragraph-aware (chunks rarely overlap), so a plain join is
-     * clean enough for grounding context.
+     * clean enough for grounding context. Cached for 1 hour to avoid repeated DB queries.
      */
     protected function moduleText(int $documentId): string
+    {
+        if (! config('rag.cache.enabled', true)) {
+            return $this->moduleTextUncached($documentId);
+        }
+
+        return Cache::remember(
+            "module_text:{$documentId}",
+            3600,
+            fn () => $this->moduleTextUncached($documentId)
+        );
+    }
+
+    protected function moduleTextUncached(int $documentId): string
     {
         return Chunk::where('document_id', $documentId)
             ->orderBy('ordinal')
@@ -723,16 +896,17 @@ class ChatPipeline
     }
 
     /**
-     * Last 6 turns (user/assistant alternating), excluding the most recent $exclude messages.
+     * Last 4 turns (user/assistant alternating), excluding the most recent $exclude messages.
+     * Reduced from 6 to 4 for faster context building and smaller prompts.
      *
      * @return array<int, array{role:string,content:string}>
      */
     protected function history(Chat $chat, int $exclude = 0): array
     {
         $msgs = $chat->messages()
-            ->latest('created_at')
+            ->latest('created_at') // Uses index on [chat_id, created_at]
             ->skip($exclude)
-            ->take(6)
+            ->take(4)
             ->get(['role', 'content'])
             ->reverse()
             ->values();

@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Http\Client\Response;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -33,6 +34,24 @@ class Gemini
      * Embed a single string. Returns float[].
      */
     public function embed(string $text, string $taskType = 'RETRIEVAL_DOCUMENT'): array
+    {
+        // Use cache for query embeddings to reduce API calls
+        if ($taskType === 'RETRIEVAL_QUERY' && config('rag.cache.enabled', true)) {
+            $cacheKey = 'embed:' . md5($text . $taskType);
+            $ttl = (int) config('rag.cache.embed_ttl', 3600);
+
+            return Cache::remember($cacheKey, $ttl, function () use ($text, $taskType) {
+                return $this->embedUncached($text, $taskType);
+            });
+        }
+
+        return $this->embedUncached($text, $taskType);
+    }
+
+    /**
+     * Embed without caching - direct API call.
+     */
+    protected function embedUncached(string $text, string $taskType): array
     {
         $url = "{$this->baseUrl}/models/{$this->embedModel}:embedContent?key={$this->apiKey}";
         $resp = $this->postWithRetry($url, [
@@ -238,12 +257,28 @@ class Gemini
         return [
             'systemInstruction' => ['parts' => [['text' => $systemPrompt]]],
             'contents' => $contents,
-            'generationConfig' => [
+            'generationConfig' => $this->generationConfig([
                 'temperature' => 0.2,
                 'topP' => 0.9,
-                'maxOutputTokens' => 1024,
-            ],
+                // Reduced from 1024 for faster responses - most answers are under 400 tokens
+                'maxOutputTokens' => 512,
+            ]),
         ];
+    }
+
+    /**
+     * Apply the configured thinking budget to a generationConfig block. Budget 0
+     * disables thinking (the latency win for grounded answers); -1 omits the
+     * field for models that don't accept it.
+     */
+    protected function generationConfig(array $config): array
+    {
+        $budget = (int) config('rag.gemini.thinking_budget', 0);
+        if ($budget >= 0) {
+            $config['thinkingConfig'] = ['thinkingBudget' => $budget];
+        }
+
+        return $config;
     }
 
     /**
@@ -343,7 +378,7 @@ class Gemini
                     ]],
                 ],
             ]],
-            'generationConfig' => ['temperature' => 0.0, 'maxOutputTokens' => 1024],
+            'generationConfig' => $this->generationConfig(['temperature' => 0.0, 'maxOutputTokens' => 1024]),
         ], maxAttempts: 3, maxWaitMs: 8000);
 
         return trim((string) $resp->json('candidates.0.content.parts.0.text', ''));
@@ -509,7 +544,7 @@ class Gemini
                     ."text, with no quotes or commentary.\n\n".$text,
                 ]],
             ]],
-            'generationConfig' => ['temperature' => 0.0, 'maxOutputTokens' => 1024],
+            'generationConfig' => $this->generationConfig(['temperature' => 0.0, 'maxOutputTokens' => 1024]),
         ], maxAttempts: 3, maxWaitMs: 8000);
 
         $out = trim((string) $resp->json('candidates.0.content.parts.0.text', ''));

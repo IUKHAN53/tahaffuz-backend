@@ -86,10 +86,11 @@ class Pinecone
             $payload['filter'] = $filter;
         }
 
+        // Reduced timeout from 30s to 10s - vector search should be fast
         $response = Http::withHeaders([
             'Api-Key' => $this->apiKey,
             'Content-Type' => 'application/json',
-        ])->timeout(30)->post("{$this->host}/query", $payload);
+        ])->timeout(10)->post("{$this->host}/query", $payload);
 
         if (! $response->successful()) {
             Log::error('Pinecone query failed', [

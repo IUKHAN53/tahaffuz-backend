@@ -33,7 +33,13 @@ return [
         // retryDelay), this just spaces calls out so we hit the cap less often.
         'embed_inter_batch_ms' => (int) env('GEMINI_EMBED_INTER_BATCH_MS', 1500),
         'base_url' => 'https://generativelanguage.googleapis.com/v1beta',
-        'timeout' => 60,
+        // Reduced from 60 to 30 for faster response times
+        'timeout' => (int) env('GEMINI_TIMEOUT', 30),
+        // Gemini 2.5 models "think" before answering by default, which adds
+        // several seconds per reply. Grounded RAG answers don't benefit from it,
+        // so it's off (0) by default. Set -1 to omit the field entirely (needed
+        // if the chat model is ever switched to one without thinking support).
+        'thinking_budget' => (int) env('GEMINI_THINKING_BUDGET', 0),
         // Page-range batch size for paged PDF extraction. Keeps each Gemini
         // response under the 32K output-token cap; tune down for very heavy
         // pages (lots of Urdu text + diagrams).
@@ -56,13 +62,26 @@ return [
         // modules' complete content is then sent, up to the token budget.
         'full_module' => (bool) env('RAG_FULL_MODULE', true),
         // How many top chunks to consider when ranking modules (routing only).
-        'routing_top_k' => (int) env('RAG_ROUTING_TOP_K', 12),
+        'routing_top_k' => (int) env('RAG_ROUTING_TOP_K', 8),
         // Total module content fed per query, in (estimated) tokens. The top
         // module is always included even if it alone exceeds this; further
         // modules are added greedily only while they still fit.
-        'module_token_budget' => (int) env('RAG_MODULE_TOKEN_BUDGET', 120000),
+        // REDUCED from 120k to 32k for faster LLM responses
+        'module_token_budget' => (int) env('RAG_MODULE_TOKEN_BUDGET', 32000),
         // Hard cap on how many modules can be fed at once.
-        'max_modules' => (int) env('RAG_MAX_MODULES', 3),
+        // REDUCED from 3 to 1 for faster responses - most queries need only 1 module
+        'max_modules' => (int) env('RAG_MAX_MODULES', 1),
+    ],
+
+    // Embedding cache settings - reduces API calls for repeated/similar queries
+    'cache' => [
+        // Query embeddings are deterministic; a day-long TTL is safe and keeps
+        // repeated questions from re-paying the embed round-trip.
+        'embed_ttl' => (int) env('RAG_EMBED_CACHE_TTL', 86400), // 24 hours
+        // Full first-turn answers. The app's suggestion cards and quick replies
+        // send identical strings, so popular questions answer instantly.
+        'answer_ttl' => (int) env('RAG_ANSWER_CACHE_TTL', 21600), // 6 hours
+        'enabled' => (bool) env('RAG_CACHE_ENABLED', true),
     ],
 
     'chunking' => [
