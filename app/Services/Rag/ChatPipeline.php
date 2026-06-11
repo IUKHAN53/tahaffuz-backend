@@ -271,7 +271,7 @@ class ChatPipeline
     {
         $started = microtime(true);
 
-        $transcript = trim($this->transcribe($audioPath, $audioMime));
+        $transcript = trim($this->transcribe($audioPath, $audioMime, $language));
 
         // Nothing intelligible came back (silent clip, mic glitch). Reply with a
         // gentle prompt to try again instead of embedding an empty query.
@@ -510,6 +510,14 @@ class ChatPipeline
             if (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
                 return 'جواب سنڌيءَ ۾ هجڻ گهرجي.';
             }
+            // No script-unique characters: honor the detected/app language
+            // rather than forcing Urdu onto Pashto/Sindhi users.
+            if ($language === 'ps') {
+                return 'جواب باید په پښتو کې وي.';
+            }
+            if ($language === 'sd') {
+                return 'جواب سنڌيءَ ۾ هجڻ گهرجي.';
+            }
             return 'جواب لازمی طور پر اردو رسم الخط میں دیں۔';
         }
 
@@ -538,7 +546,8 @@ class ChatPipeline
                 $detectedLang = 'ps';
             } elseif (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
                 $detectedLang = 'sd';
-            } else {
+            } elseif (! in_array($language, ['ps', 'sd'], true)) {
+                // Keep a ps/sd preference; otherwise Arabic script means Urdu.
                 $detectedLang = 'ur';
             }
         }
@@ -620,11 +629,11 @@ class ChatPipeline
             if (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
                 return 'sd';
             }
-            // Farsi/Persian-specific characters (پ چ ژ گ are shared, but these combinations help)
-            // Farsi uses ی instead of ے, and has unique word patterns
-            // For now, if app is set to Urdu, assume Urdu; otherwise let LLM auto-detect
-            if ($appLanguage === 'ur') {
-                return 'ur';
+            // No script-unique characters — short Pashto/Sindhi sentences often
+            // contain none, so trust the user's app language for any of the
+            // three Arabic-script languages we support.
+            if (in_array($appLanguage, ['ur', 'ps', 'sd'], true)) {
+                return $appLanguage;
             }
             // Could be Farsi, Arabic, Punjabi Shahmukhi - let LLM auto-detect
             return 'auto';
@@ -711,7 +720,7 @@ class ChatPipeline
                 $detectedLang = 'ps';
             } elseif (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
                 $detectedLang = 'sd';
-            } else {
+            } elseif (! in_array($language, ['ps', 'sd'], true)) {
                 $detectedLang = 'ur';
             }
         }
@@ -736,7 +745,7 @@ class ChatPipeline
         };
     }
 
-    protected function transcribe(string $audioPath, string $audioMime): string
+    protected function transcribe(string $audioPath, string $audioMime, ?string $language = null): string
     {
         // Use Whisper if available for better multilingual transcription
         if ($this->whisper !== null) {
@@ -751,7 +760,7 @@ class ChatPipeline
         // Delegated to the Gemini service so transcription shares the same
         // 429-aware retry/back-off as every other call — a transient rate
         // limit no longer surfaces to the app as a 500.
-        return $this->gemini->transcribe($audioPath, $audioMime);
+        return $this->gemini->transcribe($audioPath, $audioMime, $language);
     }
 
     /**

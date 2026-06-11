@@ -353,10 +353,12 @@ class Gemini
     }
 
     /**
-     * Transcribe an audio file to text. Urdu / Roman Urdu / English capable.
+     * Transcribe an audio file to text. Urdu / Pashto / Sindhi / Roman Urdu /
+     * English capable. $languageHint biases the model toward the user's app
+     * language so e.g. Pashto speech isn't coerced into Urdu.
      * Routes through the retry layer so a transient 429 no longer 500s the chat.
      */
-    public function transcribe(string $audioPath, string $audioMime): string
+    public function transcribe(string $audioPath, string $audioMime, ?string $languageHint = null): string
     {
         $bytes = @file_get_contents($audioPath);
         if ($bytes === false) {
@@ -366,12 +368,28 @@ class Gemini
         $model = (string) (config('rag.gemini.transcribe_model') ?: $this->chatModel);
         $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
 
+        $prompt = 'Transcribe this audio verbatim in its original language. The speaker may use '
+            .'Urdu, Pashto, Sindhi, Punjabi, English, or Roman Urdu — transcribe in the language '
+            .'actually spoken, in its native script (Pashto in Pashto script, Sindhi in Sindhi '
+            .'script). Do NOT translate into another language.';
+        $hintName = match ($languageHint) {
+            'ur' => 'Urdu',
+            'ps' => 'Pashto',
+            'sd' => 'Sindhi',
+            'rud' => 'Roman Urdu',
+            'en' => 'English',
+            default => null,
+        };
+        if ($hintName !== null) {
+            $prompt .= " The speaker most likely speaks {$hintName}.";
+        }
+        $prompt .= ' Return ONLY the transcript text, no commentary.';
+
         $resp = $this->postWithRetry($url, [
             'contents' => [[
                 'role' => 'user',
                 'parts' => [
-                    ['text' => 'Transcribe this audio verbatim in its original language '
-                        .'(Urdu script, Roman Urdu, or English). Return ONLY the transcript text, no commentary.'],
+                    ['text' => $prompt],
                     ['inlineData' => [
                         'mimeType' => $this->normalizeAudioMime($audioMime),
                         'data' => base64_encode($bytes),
