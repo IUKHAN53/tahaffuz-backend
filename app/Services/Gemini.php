@@ -354,8 +354,10 @@ class Gemini
 
     /**
      * Transcribe an audio file to text. Urdu / Pashto / Sindhi / Roman Urdu /
-     * English capable. $languageHint biases the model toward the user's app
-     * language so e.g. Pashto speech isn't coerced into Urdu.
+     * English capable. The transcript is ALWAYS faithful to the language the
+     * speaker actually used — the app's $languageHint is only a weak tiebreaker
+     * for genuinely ambiguous Latin speech (Roman Urdu vs English), never a
+     * coercion (a Pashto speaker on an English-set app must still get Pashto).
      * Routes through the retry layer so a transient 429 no longer 500s the chat.
      */
     public function transcribe(string $audioPath, string $audioMime, ?string $languageHint = null): string
@@ -368,10 +370,12 @@ class Gemini
         $model = (string) (config('rag.gemini.transcribe_model') ?: $this->chatModel);
         $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
 
-        $prompt = 'Transcribe this audio verbatim in its original language. The speaker may use '
-            .'Urdu, Pashto, Sindhi, Punjabi, English, or Roman Urdu — transcribe in the language '
-            .'actually spoken, in its native script (Pashto in Pashto script, Sindhi in Sindhi '
-            .'script). Do NOT translate into another language.';
+        $prompt = 'Transcribe this audio verbatim in the EXACT language the speaker actually uses, '
+            .'written in that language\'s own native script — Pashto in Pashto script (using its '
+            .'letters ګ ړ ږ ښ ځ څ ډ ټ ڼ ې), Sindhi in Sindhi script, Urdu in Urdu script. The '
+            .'speaker may use Pashto, Sindhi, Urdu, Punjabi, English, or Roman Urdu. NEVER translate '
+            .'or convert the speech into a different language or script: if they speak Pashto, output '
+            .'Pashto; if Sindhi, output Sindhi.';
         $hintName = match ($languageHint) {
             'ur' => 'Urdu',
             'ps' => 'Pashto',
@@ -381,7 +385,10 @@ class Gemini
             default => null,
         };
         if ($hintName !== null) {
-            $prompt .= " The speaker most likely speaks {$hintName}.";
+            // Tiebreaker ONLY — the actual spoken language always wins over it.
+            $prompt .= " If (and only if) the spoken language is genuinely ambiguous, the app is "
+                ."currently set to {$hintName}; but the language actually spoken always takes "
+                .'priority over this setting.';
         }
         $prompt .= ' Return ONLY the transcript text, no commentary.';
 
