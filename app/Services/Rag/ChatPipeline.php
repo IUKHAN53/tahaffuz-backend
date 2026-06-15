@@ -623,21 +623,46 @@ class ChatPipeline
      * 5. App preference (for Latin text: en vs rud)
      * 6. Other scripts (Cyrillic, Devanagari, CJK, etc.) → 'auto'
      */
+    /**
+     * High-precision Pashto function words that effectively never appear in
+     * Urdu. Used to catch Pashto questions that happen to contain no
+     * script-unique letters (so the answer still comes back in Pashto).
+     */
+    protected function hasPashtoMarkers(string $userText): bool
+    {
+        return (bool) preg_match(
+            '/(?:^|\s)(?:لپاره|نشته|شته|دلته|هلته|باید|څوک|ولرم|لرم|لري|کیدای|دپاره|ډېر|ډیر|ولې)(?:\s|$|[?؟،۔])/u',
+            $userText
+        );
+    }
+
+    /**
+     * High-precision Sindhi function words that effectively never appear in
+     * Urdu. Companion to hasPashtoMarkers for Sindhi questions.
+     */
+    protected function hasSindhiMarkers(string $userText): bool
+    {
+        return (bool) preg_match(
+            '/(?:^|\s)(?:آهي|آهيون|آهن|ڪيئن|ڇو|ڇا|ڪهڙو|ڪهڙي|هاڻي|گهرجي|ٿو|ٿي|وانگر)(?:\s|$|[?؟،۔])/u',
+            $userText
+        );
+    }
+
     protected function detectLanguage(string $userText, ?string $appLanguage): string
     {
+        // Content detection comes FIRST so the answer matches the language the
+        // question was actually asked in, regardless of the app's UI language.
+
         // Script-unique characters are the strongest possible signal — they
         // appear in no other language we serve, so they always win.
-        if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText)) {
+        if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText) || $this->hasPashtoMarkers($userText)) {
             return 'ps';
         }
-        if (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
+        if (preg_match('/[ڳڻڪھڀٺٽ۾]/u', $userText) || $this->hasSindhiMarkers($userText)) {
             return 'sd';
         }
 
-        // An explicit Pashto/Sindhi app choice is AUTHORITATIVE for any input.
-        // The user has told us what language they want replies in; short
-        // Pashto/Sindhi sentences (and voice mis-transcribed toward Urdu) often
-        // carry no script-unique letters, so we must not fall through to Urdu.
+        // No content signal — fall back to the user's explicit app choice.
         if ($appLanguage === 'ps' || $appLanguage === 'sd') {
             return $appLanguage;
         }
