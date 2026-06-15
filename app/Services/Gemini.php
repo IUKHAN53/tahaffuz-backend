@@ -496,7 +496,7 @@ class Gemini
         $voice ??= (string) config('rag.gemini.tts_voice', 'Kore');
         $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
 
-        $resp = $this->postWithRetry($url, [
+        $payload = [
             'contents' => [[
                 'role' => 'user',
                 'parts' => [['text' => $text]],
@@ -509,18 +509,30 @@ class Gemini
                     ],
                 ],
             ],
-        ], maxAttempts: 3, maxWaitMs: 8000);
+        ];
 
-        $b64 = $resp->json('candidates.0.content.parts.0.inlineData.data');
-        if (! is_string($b64) || $b64 === '') {
-            throw new RuntimeException('Gemini TTS returned no audio.');
-        }
-        $pcm = base64_decode($b64, true);
-        if ($pcm === false || $pcm === '') {
-            throw new RuntimeException('Gemini TTS returned undecodable audio.');
+        // The TTS model occasionally returns a 200 with no audio part. That's a
+        // transient empty response, not an HTTP error, so postWithRetry doesn't
+        // catch it — retry the whole call a couple of times before giving up.
+        $lastError = 'Gemini TTS returned no audio.';
+        for ($attempt = 1; $attempt <= 3; $attempt++) {
+            $resp = $this->postWithRetry($url, $payload, maxAttempts: 3, maxWaitMs: 8000);
+
+            $b64 = $resp->json('candidates.0.content.parts.0.inlineData.data');
+            if (is_string($b64) && $b64 !== '') {
+                $pcm = base64_decode($b64, true);
+                if ($pcm !== false && $pcm !== '') {
+                    return $pcm;
+                }
+                $lastError = 'Gemini TTS returned undecodable audio.';
+            }
+
+            if ($attempt < 3) {
+                usleep(600 * 1000);
+            }
         }
 
-        return $pcm;
+        throw new RuntimeException($lastError);
     }
 
     /**

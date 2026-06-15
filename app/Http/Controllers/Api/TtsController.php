@@ -52,8 +52,14 @@ class TtsController extends Controller
         // Guard the free-tier quota and keep latency sane — answers are short.
         $text = mb_substr($text, 0, 2000);
 
-        // Use ElevenLabs if available for better voice quality
-        if ($this->elevenLabs !== null) {
+        // ElevenLabs (the configured multilingual voice) has no Pashto/Sindhi
+        // support, so those languages always go through Gemini TTS. Detect them
+        // from the script too, in case the lang hint is missing.
+        $isPashtoOrSindhi = in_array($lang, ['ps', 'sd'], true)
+            || preg_match('/[ټډړږښځڅېګڼڳڻڪھڀٺٽ۾]/u', $text);
+
+        // Use ElevenLabs only for the languages its voice actually handles.
+        if ($this->elevenLabs !== null && ! $isPashtoOrSindhi) {
             return $this->speakWithElevenLabs($text, $lang);
         }
 
