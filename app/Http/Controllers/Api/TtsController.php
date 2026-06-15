@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\EdgeTts;
 use App\Services\ElevenLabs;
 use App\Services\Gemini;
 use Illuminate\Http\Request;
@@ -15,8 +16,22 @@ class TtsController extends Controller
 {
     protected ?ElevenLabs $elevenLabs = null;
 
+    protected ?EdgeTts $edgeTts = null;
+
     public function __construct(protected Gemini $gemini)
     {
+        // Primary TTS: Microsoft Edge neural voices (free, no quota, has Pashto).
+        if (config('rag.edge_tts.enabled', true)) {
+            try {
+                $svc = app(EdgeTts::class);
+                if ($svc->isAvailable()) {
+                    $this->edgeTts = $svc;
+                }
+            } catch (Throwable $e) {
+                // edge-tts unavailable — fall through to Gemini/ElevenLabs.
+            }
+        }
+
         // Initialize ElevenLabs if configured
         if (config('rag.providers.tts') === 'elevenlabs' && config('services.elevenlabs.api_key')) {
             try {
@@ -49,24 +64,43 @@ class TtsController extends Controller
         if ($text === '') {
             return response()->json(['error' => 'text is required'], 422);
         }
-        // Guard the free-tier quota and keep latency sane — answers are short.
+        // Keep latency sane — answers are short.
         $text = mb_substr($text, 0, 2000);
 
-        // Neither available provider can synthesize Pashto or Sindhi: ElevenLabs
-        // needs a paid plan for the voice, and Gemini's TTS model returns
-        // finishReason OTHER (no audio) for both. Fail fast so the app falls
-        // back to its on-device voice instead of waiting on calls that always
-        // fail. Detect from the lang hint or the script.
-        $isPashtoOrSindhi = in_array($lang, ['ps', 'sd'], true)
-            || preg_match('/[ټډړږښځڅېګڼڳڻڪھڀٺٽ۾]/u', $text);
-        if ($isPashtoOrSindhi) {
+        // Resolve the language from the hint and the text's own script.
+        $lang = $this->resolveLang($text, $lang);
+
+        // Sindhi has no TTS voice from any provider — let the app use its
+        // on-device voice instead of waiting on a call that can't succeed.
+        if ($lang === 'sd') {
             return response()->json([
                 'error' => 'tts_unavailable',
                 'reason' => 'language_unsupported',
             ], 502);
         }
 
-        // Use ElevenLabs only for the languages its voice actually handles.
+        // Primary: free Microsoft Edge neural voices (en/ur/rud/ps).
+        if ($this->edgeTts !== null) {
+            $edge = $this->speakWithEdge($text, $lang);
+            if ($edge !== null) {
+                return $edge;
+            }
+            // Pashto has no other server-side option — fall back to on-device.
+            if ($lang === 'ps') {
+                return response()->json([
+                    'error' => 'tts_unavailable',
+                    'reason' => 'edge_failed',
+                ], 502);
+            }
+        } elseif ($lang === 'ps') {
+            // Edge unavailable and nothing else can do Pashto.
+            return response()->json([
+                'error' => 'tts_unavailable',
+                'reason' => 'language_unsupported',
+            ], 502);
+        }
+
+        // Fallback for en/ur/rud: ElevenLabs (if configured) else Gemini.
         if ($this->elevenLabs !== null) {
             return $this->speakWithElevenLabs($text, $lang);
         }
@@ -172,6 +206,66 @@ class TtsController extends Controller
             'Cache-Control' => 'public, max-age=604800',
             'Accept-Ranges' => 'bytes',
         ]);
+    }
+
+    /**
+     * Synthesize with a Microsoft Edge neural voice. Returns null on any
+     * failure so the caller can fall back. Cached on disk per (voice, text).
+     */
+    protected function speakWithEdge(string $text, string $lang): ?Response
+    {
+        $voice = (string) config("rag.edge_tts.voices.{$lang}", '');
+        if ($voice === '' || $this->edgeTts === null) {
+            return null;
+        }
+
+        $disk = Storage::disk('local');
+        $key = sha1(implode('|', ['edge', $voice, $lang, $text]));
+        $path = "tts-cache/{$key}.mp3";
+
+        if (! $disk->exists($path)) {
+            try {
+                $speechText = $this->speechText($text, $lang);
+                $mp3 = $this->edgeTts->synthesize($speechText, $voice);
+                $disk->put($path, $mp3);
+            } catch (Throwable $e) {
+                Log::warning('Edge TTS failed', ['lang' => $lang, 'error' => $e->getMessage()]);
+
+                return null;
+            }
+        }
+
+        $mp3 = $disk->get($path);
+
+        return response($mp3, 200, [
+            'Content-Type' => 'audio/mpeg',
+            'Content-Length' => (string) strlen((string) $mp3),
+            'Cache-Control' => 'public, max-age=604800',
+            'Accept-Ranges' => 'bytes',
+        ]);
+    }
+
+    /**
+     * Resolve the effective language from the request hint and the text's own
+     * script. Script-unique Pashto/Sindhi letters win; otherwise a valid hint
+     * is honored; otherwise Arabic script means Urdu, and the rest is English.
+     */
+    protected function resolveLang(string $text, string $hint): string
+    {
+        if (preg_match('/[ټډړږښځڅېګڼ]/u', $text)) {
+            return 'ps';
+        }
+        if (preg_match('/[ڳڻڪھڀٺٽ۾]/u', $text)) {
+            return 'sd';
+        }
+        if (in_array($hint, ['en', 'ur', 'rud', 'ps', 'sd'], true)) {
+            return $hint;
+        }
+        if (preg_match('/\p{Arabic}/u', $text)) {
+            return 'ur';
+        }
+
+        return 'en';
     }
 
     /**

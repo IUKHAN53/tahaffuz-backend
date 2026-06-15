@@ -47,6 +47,21 @@ return [
         'inter_batch_delay_ms' => (int) env('GEMINI_PDF_INTER_BATCH_MS', 1500),
     ],
 
+    // Microsoft Edge "Read Aloud" neural voices via the edge-tts CLI. Free,
+    // no API key, no daily quota, and the only usable source of a Pashto voice.
+    // Primary TTS for en/ur/rud/ps; Gemini is the fallback. Sindhi has no voice
+    // anywhere, so it is never sent here.
+    'edge_tts' => [
+        'enabled' => (bool) env('RAG_EDGE_TTS_ENABLED', true),
+        'binary' => env('EDGE_TTS_BINARY', '/opt/edge-tts/bin/edge-tts'),
+        'voices' => [
+            'en' => env('EDGE_TTS_VOICE_EN', 'en-US-AriaNeural'),
+            'ur' => env('EDGE_TTS_VOICE_UR', 'ur-PK-UzmaNeural'),
+            'rud' => env('EDGE_TTS_VOICE_UR', 'ur-PK-UzmaNeural'),
+            'ps' => env('EDGE_TTS_VOICE_PS', 'ps-AF-GulNawazNeural'),
+        ],
+    ],
+
     'retrieval' => [
         'top_k' => (int) env('VECTOR_TOP_K', 6),
         'candidate_pool' => (int) env('VECTOR_CANDIDATE_POOL', 24),
