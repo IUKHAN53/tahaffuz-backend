@@ -140,14 +140,16 @@ class ChatPipeline
             $this->replyInstruction($userText, $effectiveLanguage),
         );
 
-        if ($reply['text'] !== '') {
-            $this->storeAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn, $reply['text'], $citations);
+        $replyText = $this->sanitizeAnswer($reply['text']);
+
+        if ($replyText !== '') {
+            $this->storeAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn, $replyText, $citations);
         }
 
         $assistant = Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_ASSISTANT,
-            'content' => $reply['text'] !== '' ? $reply['text'] : $this->refusalText($effectiveLanguage, $userText),
+            'content' => $replyText !== '' ? $replyText : $this->refusalText($effectiveLanguage, $userText),
             'citations' => $citations,
             'meta' => ['usage' => $reply['usage'] ?? [], 'language' => $effectiveLanguage],
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
@@ -241,7 +243,7 @@ class ChatPipeline
             }
         }
 
-        $full = trim($full);
+        $full = $this->sanitizeAnswer(trim($full));
         // Only cache answers that streamed to completion — a partial answer
         // must never become the canonical cached reply.
         if ($completed && $full !== '') {
@@ -332,10 +334,12 @@ class ChatPipeline
             $this->replyInstruction($transcript, $effectiveLanguage),
         );
 
+        $replyText = $this->sanitizeAnswer($reply['text']);
+
         $assistant = Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_ASSISTANT,
-            'content' => $reply['text'] !== '' ? $reply['text'] : $this->refusalText($effectiveLanguage, $transcript),
+            'content' => $replyText !== '' ? $replyText : $this->refusalText($effectiveLanguage, $transcript),
             'citations' => $citations,
             'meta' => ['usage' => $reply['usage'] ?? [], 'source' => 'voice', 'language' => $effectiveLanguage],
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
@@ -501,23 +505,25 @@ class ChatPipeline
      */
     protected function replyInstruction(string $userText, ?string $language): string
     {
+        // Script-unique characters win outright.
+        if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText)) {
+            return 'جواب لازماً په روان پښتو کې ولیکئ، نه په اردو کې.';
+        }
+        if (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
+            return 'جواب لازمي طور تي سنڌيءَ ۾ لکو، اردوءَ ۾ نه.';
+        }
+
+        // An explicit Pashto/Sindhi reply language is honored regardless of the
+        // question's script — the context is Urdu, so without this the answer
+        // drifts back to Urdu.
+        if ($language === 'ps') {
+            return 'جواب لازماً په روان پښتو کې ولیکئ، نه په اردو کې.';
+        }
+        if ($language === 'sd') {
+            return 'جواب لازمي طور تي سنڌيءَ ۾ لکو، اردوءَ ۾ نه.';
+        }
+
         if (preg_match('/\p{Arabic}/u', $userText)) {
-            // Detect Pashto-specific characters
-            if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText)) {
-                return 'جواب باید په پښتو کې وي.';
-            }
-            // Detect Sindhi-specific characters
-            if (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
-                return 'جواب سنڌيءَ ۾ هجڻ گهرجي.';
-            }
-            // No script-unique characters: honor the detected/app language
-            // rather than forcing Urdu onto Pashto/Sindhi users.
-            if ($language === 'ps') {
-                return 'جواب باید په پښتو کې وي.';
-            }
-            if ($language === 'sd') {
-                return 'جواب سنڌيءَ ۾ هجڻ گهرجي.';
-            }
             return 'جواب لازمی طور پر اردو رسم الخط میں دیں۔';
         }
 
@@ -619,21 +625,28 @@ class ChatPipeline
      */
     protected function detectLanguage(string $userText, ?string $appLanguage): string
     {
-        // Check for Arabic script (includes Urdu, Pashto, Sindhi, Farsi, Arabic, Punjabi Shahmukhi)
+        // Script-unique characters are the strongest possible signal — they
+        // appear in no other language we serve, so they always win.
+        if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText)) {
+            return 'ps';
+        }
+        if (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
+            return 'sd';
+        }
+
+        // An explicit Pashto/Sindhi app choice is AUTHORITATIVE for any input.
+        // The user has told us what language they want replies in; short
+        // Pashto/Sindhi sentences (and voice mis-transcribed toward Urdu) often
+        // carry no script-unique letters, so we must not fall through to Urdu.
+        if ($appLanguage === 'ps' || $appLanguage === 'sd') {
+            return $appLanguage;
+        }
+
+        // Check for Arabic script (Urdu, Farsi, Arabic, Punjabi Shahmukhi)
         if (preg_match('/\p{Arabic}/u', $userText)) {
-            // Pashto-specific characters
-            if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText)) {
-                return 'ps';
-            }
-            // Sindhi-specific characters
-            if (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
-                return 'sd';
-            }
-            // No script-unique characters — short Pashto/Sindhi sentences often
-            // contain none, so trust the user's app language for any of the
-            // three Arabic-script languages we support.
-            if (in_array($appLanguage, ['ur', 'ps', 'sd'], true)) {
-                return $appLanguage;
+            // Urdu app (or no preference) → Urdu. Otherwise it may be Farsi etc.
+            if ($appLanguage === 'ur' || $appLanguage === null) {
+                return 'ur';
             }
             // Could be Farsi, Arabic, Punjabi Shahmukhi - let LLM auto-detect
             return 'auto';
@@ -764,6 +777,46 @@ class ChatPipeline
     }
 
     /**
+     * Strip any source/module references the model may have leaked into a reply.
+     * Belt-and-suspenders behind the system-prompt rule and the title-free
+     * context: removes "[DOC: …]" labels and "Module 1 / ماڈیول 1 / ماډيول 1 /
+     * ماڊيول 1 …" style citations, in any of the supported scripts.
+     */
+    protected function sanitizeAnswer(string $text): string
+    {
+        if ($text === '') {
+            return $text;
+        }
+
+        // Each pattern is tightly bounded — it removes only the reference token
+        // (and an immediate connector/punctuation), never a run up to the next
+        // sentence end, so it can't swallow the real answer.
+
+        // "[DOC: ...]" labels copied verbatim from old context.
+        $text = preg_replace('/\[\s*DOC\s*:?[^\]]*\]\s*/iu', '', $text) ?? $text;
+
+        // Parenthetical "(Module 1 …)".
+        $text = preg_replace('/\(\s*module\s*#?\d+[^)]*\)\s*/iu', '', $text) ?? $text;
+        // Prose "According to / as per / see Module 2," — drop the lead-in only.
+        $text = preg_replace('/\b(?:as per|according to|see|per)\s+module\s*#?\d+\s*[,:.\-]?\s*/iu', '', $text) ?? $text;
+
+        // Parenthetical Urdu/Pashto/Sindhi "(ماڈیول ۱ …)".
+        $text = preg_replace('/\(\s*(?:ماڈیول|ماډیول|ماڊيول|ماجول)\s*[#0-9۰-۹]+[^)]*\)\s*/u', '', $text) ?? $text;
+        // Prose "ماڈیول ۱ کے مطابق،" — the reference + an immediate connector and
+        // its trailing comma only (longest connector first in the alternation).
+        $text = preg_replace('/(?:ماڈیول|ماډیول|ماڊيول|ماجول)\s*[#0-9۰-۹]+(?:\s*(?:کے مطابق|جي مطابق|له مخې|کے|کا|کی|۾))?\s*[،,:：۔\-]?\s*/u', '', $text) ?? $text;
+
+        // "دستاویز/سند کے مطابق" — "per the document".
+        $text = preg_replace('/(?:دستاویز|دستاويز|سند)\s*(?:کے مطابق|جي مطابق|له مخې|مطابق)\s*[،,]?\s*/u', '', $text) ?? $text;
+
+        // Collapse any double spaces / blank lines the removals left behind.
+        $text = preg_replace('/[ \t]{2,}/u', ' ', $text) ?? $text;
+        $text = preg_replace('/\n{3,}/u', "\n\n", $text) ?? $text;
+
+        return trim($text);
+    }
+
+    /**
      * Build the grounding context from retrieval hits. In full-module mode the
      * hits route the query to the most relevant module(s) and we feed each
      * module's FULL text (within a token budget); otherwise we fall back to the
@@ -834,7 +887,10 @@ class ChatPipeline
             }
             $usedTokens += $tokens;
 
-            $blocks[] = "[DOC: {$info['title']}]\n".$text;
+            // Neutral marker only — never feed the real module/document title to
+            // the model, or it echoes "Module 1 …" into the user-facing answer.
+            // The title is still kept in citations for the admin test chat.
+            $blocks[] = $text;
             $citations[] = [
                 'chunk_id' => $info['chunk']->id,
                 'document_id' => $docId,
@@ -890,7 +946,8 @@ class ChatPipeline
             $chunk = $hit['chunk'];
             $doc = $chunk->document;
             $title = $doc?->title ?? "Doc {$chunk->document_id}";
-            $blocks[] = "[DOC: {$title}]\n".trim((string) $chunk->content);
+            // No title label in the context — the model leaks it into answers.
+            $blocks[] = trim((string) $chunk->content);
             $citations[] = [
                 'chunk_id' => $chunk->id,
                 'document_id' => $chunk->document_id,
