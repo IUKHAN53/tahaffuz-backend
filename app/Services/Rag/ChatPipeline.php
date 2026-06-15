@@ -785,11 +785,19 @@ class ChatPipeline
 
     protected function transcribe(string $audioPath, string $audioMime, ?string $language = null): string
     {
-        // Use Whisper if available for better multilingual transcription
+        // Use Whisper if available for better multilingual transcription. Force
+        // the language only for the Arabic-script tongues the user may have
+        // explicitly chosen (ur/ps/sd); for en/rud/unknown let Whisper auto-
+        // detect so a Pashto speaker on an English app isn't forced to English.
         if ($this->whisper !== null) {
             try {
-                $result = $this->whisper->transcribe($audioPath);
-                return $result['text'] ?? '';
+                $whisperLang = in_array($language, ['ur', 'ps', 'sd'], true) ? $language : null;
+                $result = $this->whisper->transcribe($audioPath, $whisperLang);
+                $text = trim($result['text'] ?? '');
+                if ($text !== '') {
+                    return $text;
+                }
+                // Empty transcript — fall through to Gemini.
             } catch (Throwable $e) {
                 // Fall back to Gemini if Whisper fails
             }

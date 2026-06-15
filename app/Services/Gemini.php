@@ -376,19 +376,26 @@ class Gemini
             .'speaker may use Pashto, Sindhi, Urdu, Punjabi, English, or Roman Urdu. NEVER translate '
             .'or convert the speech into a different language or script: if they speak Pashto, output '
             .'Pashto; if Sindhi, output Sindhi.';
-        $hintName = match ($languageHint) {
-            'ur' => 'Urdu',
-            'ps' => 'Pashto',
-            'sd' => 'Sindhi',
-            'rud' => 'Roman Urdu',
-            'en' => 'English',
-            default => null,
-        };
-        if ($hintName !== null) {
-            // Tiebreaker ONLY — the actual spoken language always wins over it.
-            $prompt .= " If (and only if) the spoken language is genuinely ambiguous, the app is "
-                ."currently set to {$hintName}; but the language actually spoken always takes "
-                .'priority over this setting.';
+        if ($languageHint === 'ps' || $languageHint === 'sd') {
+            // The user explicitly chose Pashto/Sindhi — these are hard for STT
+            // models (they tend to drift to Urdu), so treat the choice as a firm
+            // directive, not a tiebreaker.
+            $lang = $languageHint === 'ps' ? 'Pashto' : 'Sindhi';
+            $prompt .= " The speaker is speaking {$lang}. Transcribe it in {$lang} using {$lang} "
+                .'script. Do NOT output Urdu, Dari, or Persian — keep it in '.$lang.'.';
+        } else {
+            $hintName = match ($languageHint) {
+                'ur' => 'Urdu',
+                'rud' => 'Roman Urdu',
+                'en' => 'English',
+                default => null,
+            };
+            if ($hintName !== null) {
+                // Tiebreaker ONLY — the actual spoken language always wins.
+                $prompt .= " If (and only if) the spoken language is genuinely ambiguous, the app is "
+                    ."currently set to {$hintName}; but the language actually spoken always takes "
+                    .'priority over this setting.';
+            }
         }
         $prompt .= ' Return ONLY the transcript text, no commentary.';
 
