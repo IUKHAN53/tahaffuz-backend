@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Services\EdgeTts;
 use App\Services\ElevenLabs;
 use App\Services\Gemini;
+use App\Services\OpenAiTts;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -18,6 +19,8 @@ class TtsController extends Controller
 
     protected ?EdgeTts $edgeTts = null;
 
+    protected ?OpenAiTts $openAiTts = null;
+
     public function __construct(protected Gemini $gemini)
     {
         // Primary TTS: Microsoft Edge neural voices (free, no quota, has Pashto).
@@ -29,6 +32,19 @@ class TtsController extends Controller
                 }
             } catch (Throwable $e) {
                 // edge-tts unavailable — fall through to Gemini/ElevenLabs.
+            }
+        }
+
+        // OpenAI TTS: the only Sindhi voice, and a reliable cross-language
+        // fallback when Edge fails.
+        if (config('rag.openai_tts.enabled', true)) {
+            try {
+                $svc = app(OpenAiTts::class);
+                if ($svc->isAvailable()) {
+                    $this->openAiTts = $svc;
+                }
+            } catch (Throwable $e) {
+                // OpenAI unavailable — Sindhi will 502 to on-device.
             }
         }
 
@@ -70,37 +86,40 @@ class TtsController extends Controller
         // Resolve the language from the hint and the text's own script.
         $lang = $this->resolveLang($text, $lang);
 
-        // Sindhi has no TTS voice from any provider — let the app use its
-        // on-device voice instead of waiting on a call that can't succeed.
+        // Sindhi: OpenAI is the only model that voices it. No Edge/Gemini path.
         if ($lang === 'sd') {
-            return response()->json([
+            $oa = $this->speakWithOpenAi($text, $lang);
+
+            // Nothing else can do Sindhi — 502 lets the app use its on-device voice.
+            return $oa ?? response()->json([
                 'error' => 'tts_unavailable',
                 'reason' => 'language_unsupported',
             ], 502);
         }
 
-        // Primary: free Microsoft Edge neural voices (en/ur/rud/ps).
+        // Primary for en/ur/rud/ps: free Microsoft Edge neural voices.
         if ($this->edgeTts !== null) {
             $edge = $this->speakWithEdge($text, $lang);
             if ($edge !== null) {
                 return $edge;
             }
-            // Pashto has no other server-side option — fall back to on-device.
-            if ($lang === 'ps') {
-                return response()->json([
-                    'error' => 'tts_unavailable',
-                    'reason' => 'edge_failed',
-                ], 502);
-            }
-        } elseif ($lang === 'ps') {
-            // Edge unavailable and nothing else can do Pashto.
+        }
+
+        // Fallback: OpenAI (reliable, all these languages).
+        $oa = $this->speakWithOpenAi($text, $lang);
+        if ($oa !== null) {
+            return $oa;
+        }
+
+        // Pashto has no remaining server option — on-device.
+        if ($lang === 'ps') {
             return response()->json([
                 'error' => 'tts_unavailable',
-                'reason' => 'language_unsupported',
+                'reason' => 'edge_failed',
             ], 502);
         }
 
-        // Fallback for en/ur/rud: ElevenLabs (if configured) else Gemini.
+        // Last resort for en/ur/rud: ElevenLabs (if configured) else Gemini.
         if ($this->elevenLabs !== null) {
             return $this->speakWithElevenLabs($text, $lang);
         }
@@ -230,6 +249,44 @@ class TtsController extends Controller
                 $disk->put($path, $mp3);
             } catch (Throwable $e) {
                 Log::warning('Edge TTS failed', ['lang' => $lang, 'error' => $e->getMessage()]);
+
+                return null;
+            }
+        }
+
+        $mp3 = $disk->get($path);
+
+        return response($mp3, 200, [
+            'Content-Type' => 'audio/mpeg',
+            'Content-Length' => (string) strlen((string) $mp3),
+            'Cache-Control' => 'public, max-age=604800',
+            'Accept-Ranges' => 'bytes',
+        ]);
+    }
+
+    /**
+     * Synthesize with OpenAI's multilingual TTS (gpt-4o-mini-tts). The only
+     * voice for Sindhi; also a fallback for the other languages. Returns null
+     * on failure. Cached on disk per (voice, lang, text).
+     */
+    protected function speakWithOpenAi(string $text, string $lang): ?Response
+    {
+        if ($this->openAiTts === null) {
+            return null;
+        }
+
+        $voice = (string) config('rag.openai_tts.voice', 'alloy');
+        $disk = Storage::disk('local');
+        $key = sha1(implode('|', ['openai', $voice, $lang, $text]));
+        $path = "tts-cache/{$key}.mp3";
+
+        if (! $disk->exists($path)) {
+            try {
+                $speechText = $this->speechText($text, $lang);
+                $mp3 = $this->openAiTts->synthesize($speechText, $voice);
+                $disk->put($path, $mp3);
+            } catch (Throwable $e) {
+                Log::warning('OpenAI TTS failed', ['lang' => $lang, 'error' => $e->getMessage()]);
 
                 return null;
             }

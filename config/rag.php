@@ -62,6 +62,15 @@ return [
         ],
     ],
 
+    // OpenAI TTS (gpt-4o-mini-tts). A single multilingual model that reads any
+    // script, so it's the ONLY usable Sindhi voice — and a reliable fallback
+    // for the other languages if Edge fails. Voices are language-agnostic.
+    'openai_tts' => [
+        'enabled' => (bool) env('RAG_OPENAI_TTS_ENABLED', true),
+        'model' => env('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),
+        'voice' => env('OPENAI_TTS_VOICE', 'alloy'),
+    ],
+
     'retrieval' => [
         'top_k' => (int) env('VECTOR_TOP_K', 6),
         'candidate_pool' => (int) env('VECTOR_CANDIDATE_POOL', 24),
