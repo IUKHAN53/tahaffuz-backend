@@ -76,9 +76,8 @@ class ChatPipeline
     {
         $started = microtime(true);
 
-        // Detect the actual language from user's text - this overrides app preference
-        // so answers match the language the question was asked in
-        $effectiveLanguage = $this->detectLanguage($userText, $language);
+        // The selected language drives the reply (auto-detect only as fallback).
+        $effectiveLanguage = $this->effectiveLanguage($userText, $language);
 
         // First turn of a chat? Answers don't depend on history then, so they
         // are safe to serve from / store into the shared answer cache.
@@ -171,8 +170,8 @@ class ChatPipeline
     {
         $started = microtime(true);
 
-        // Detect the actual language from user's text
-        $effectiveLanguage = $this->detectLanguage($userText, $language);
+        // The selected language drives the reply (auto-detect only as fallback).
+        $effectiveLanguage = $this->effectiveLanguage($userText, $language);
 
         $isFirstTurn = ! $chat->messages()->exists();
 
@@ -289,8 +288,8 @@ class ChatPipeline
             return ['message' => $assistant, 'citations' => [], 'transcript' => ''];
         }
 
-        // Detect the actual language from the transcript
-        $effectiveLanguage = $this->detectLanguage($transcript, $language);
+        // The selected language drives the reply (auto-detect only as fallback).
+        $effectiveLanguage = $this->effectiveLanguage($transcript, $language);
 
         Message::create([
             'chat_id' => $chat->id,
@@ -623,6 +622,22 @@ class ChatPipeline
      * 5. App preference (for Latin text: en vs rud)
      * 6. Other scripts (Cyrillic, Devanagari, CJK, etc.) → 'auto'
      */
+    /**
+     * The language the answer should be written in. The app now lets the user
+     * pick a language on the home screen, and that choice is AUTHORITATIVE — the
+     * answer is always in the selected language regardless of what language the
+     * question was typed/spoken in (simpler, faster, and removes detection
+     * guesswork). Only when no explicit choice is sent do we auto-detect.
+     */
+    protected function effectiveLanguage(string $userText, ?string $language): string
+    {
+        if (in_array($language, ['en', 'ur', 'rud', 'ps', 'sd'], true)) {
+            return $language;
+        }
+
+        return $this->detectLanguage($userText, $language);
+    }
+
     /**
      * High-precision Pashto function words that effectively never appear in
      * Urdu. Used to catch Pashto questions that happen to contain no
