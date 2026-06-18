@@ -386,7 +386,7 @@ class Gemini
         } else {
             $hintName = match ($languageHint) {
                 'ur' => 'Urdu',
-                'rud' => 'Roman Urdu',
+                'fa' => 'Farsi (Persian)',
                 'en' => 'English',
                 default => null,
             };

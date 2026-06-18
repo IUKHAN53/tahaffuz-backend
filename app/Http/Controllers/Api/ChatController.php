@@ -77,7 +77,7 @@ class ChatController extends Controller
             'chat_id' => ['nullable', 'integer'],
             'knowledge_base_id' => ['nullable', 'integer'],
             'message' => ['required', 'string', 'min:1', 'max:4000'],
-            'language' => ['nullable', 'string', 'in:en,ur,rud,ps,sd'],
+            'language' => ['nullable', 'string', 'in:en,ur,fa,ps,sd'],
         ]);
 
         $chat = $this->pipeline->findOrCreateChat(
@@ -116,7 +116,7 @@ class ChatController extends Controller
             'chat_id' => ['nullable', 'integer'],
             'knowledge_base_id' => ['nullable', 'integer'],
             'message' => ['required', 'string', 'min:1', 'max:4000'],
-            'language' => ['nullable', 'string', 'in:en,ur,rud,ps,sd'],
+            'language' => ['nullable', 'string', 'in:en,ur,fa,ps,sd'],
         ]);
 
         $chat = $this->pipeline->findOrCreateChat(
@@ -176,7 +176,7 @@ class ChatController extends Controller
             'chat_id' => ['nullable', 'integer'],
             'knowledge_base_id' => ['nullable', 'integer'],
             'audio' => ['required', 'file', 'mimes:m4a,mp3,mp4,wav,ogg,webm,3gp,aac', 'max:10240'],
-            'language' => ['nullable', 'string', 'in:en,ur,rud,ps,sd'],
+            'language' => ['nullable', 'string', 'in:en,ur,fa,ps,sd'],
         ]);
 
         $chat = $this->pipeline->findOrCreateChat(
@@ -224,7 +224,7 @@ class ChatController extends Controller
     {
         return match ($language) {
             'en'  => 'The assistant is busy right now. Please try again in a moment.',
-            'rud' => 'Assistant is waqt mushghool hai. Baraah-e-karam thodi dair baad dobaara koshish karein.',
+            'fa'  => 'دستیار در حال حاضر مشغول است. لطفاً چند لحظه دیگر دوباره تلاش کنید.',
             'ps'  => 'مرستندویه اوس بوخت دی. مهرباني وکړئ یو شیبه وروسته بیا هڅه وکړئ.',
             'sd'  => 'مددگار هن وقت مصروف آهي. مهرباني ڪري ٿوري دير کانپوءِ ٻيهر ڪوشش ڪريو.',
             default => 'معاون اس وقت مصروف ہے۔ براہ کرم تھوڑی دیر بعد دوبارہ کوشش کریں۔',

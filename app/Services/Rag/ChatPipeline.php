@@ -488,8 +488,8 @@ class ChatPipeline
         return match ($language) {
             'ps'  => (string) config('rag.system_prompt_ps', $basePrompt),
             'sd'  => (string) config('rag.system_prompt_sd', $basePrompt),
+            'fa'  => (string) config('rag.system_prompt_fa', $basePrompt),
             'en'  => $basePrompt . "\n\nIMPORTANT: The user is asking in English. Respond in clear, natural English. Do NOT translate word-by-word from Urdu - understand the content and explain it naturally in English.",
-            'rud' => $basePrompt . "\n\nIMPORTANT: User is writing in Roman Urdu (Urdu with Latin letters). Reply in Roman Urdu only, not Urdu script.",
             'auto' => $basePrompt . "\n\nIMPORTANT: Detect the language of the user's question and respond in that SAME language. The knowledge base is in Urdu, so understand the Urdu content first, then formulate a natural response in the user's language. Do NOT translate word-by-word - provide natural, fluent responses. Supported languages include but are not limited to: Farsi/Persian, Punjabi, Arabic, Hindi, Turkish, Bengali, and others.",
             default => $basePrompt,
         };
@@ -528,7 +528,7 @@ class ChatPipeline
 
         return match ($language) {
             'ur'  => 'جواب لازمی طور پر اردو رسم الخط میں دیں۔',
-            'rud' => 'Reply ONLY in Roman Urdu (Urdu written with Latin letters), not in Urdu script.',
+            'fa'  => 'پاسخ را حتماً به زبان فارسی روان بنویسید، نه به اردو.',
             'en'  => 'Reply ONLY in English.',
             'ps'  => 'جواب باید په پښتو کې وي.',
             'sd'  => 'جواب سنڌيءَ ۾ هجڻ گهرجي.',
@@ -566,7 +566,7 @@ class ChatPipeline
         // Fall back to hardcoded defaults
         return match ($detectedLang) {
             'en'  => "Sorry, I don't have information about that. Please contact your supervisor.",
-            'rud' => 'Maazrat, mere paas is baare mein maloomat nahi hain. Baraah-e-karam apne supervisor se rabta karein.',
+            'fa'  => 'متأسفم، در این مورد اطلاعاتی ندارم. لطفاً با سرپرست خود تماس بگیرید.',
             'ps'  => 'بخښنه غواړم، زه د دې په اړه معلومات نلرم. مهرباني وکړئ خپل سوپروایزر سره اړیکه ونیسئ.',
             'sd'  => 'معاف ڪجو، مون وٽ ان بابت معلومات ناهي. مهرباني ڪري پنهنجي سپروائيزر سان رابطو ڪريو.',
             // For auto-detected languages, use English as it's widely understood
@@ -589,7 +589,7 @@ class ChatPipeline
         // Fall back to hardcoded defaults
         return match ($language) {
             'en'  => "Sorry, I couldn't hear that clearly. Please try recording again.",
-            'rud' => 'Maazrat, awaaz saaf sunai nahi di. Baraah-e-karam dobaara record karein.',
+            'fa'  => 'متأسفم، صدا واضح شنیده نشد. لطفاً دوباره ضبط کنید.',
             'ps'  => 'بخښنه، زه دا روښانه واورېدلی نه شم. مهرباني وکړئ بیا ریکارډ کړئ.',
             'sd'  => 'معاف ڪجو، مان اهو صاف ٻڌي نه سگهيس. مهرباني ڪري ٻيهر رڪارڊ ڪريو.',
             'auto' => "Sorry, I couldn't hear that clearly. Please try recording again.",
@@ -631,7 +631,7 @@ class ChatPipeline
      */
     protected function effectiveLanguage(string $userText, ?string $language): string
     {
-        if (in_array($language, ['en', 'ur', 'rud', 'ps', 'sd'], true)) {
+        if (in_array($language, ['en', 'ur', 'fa', 'ps', 'sd'], true)) {
             return $language;
         }
 
@@ -791,7 +791,7 @@ class ChatPipeline
     {
         return match ($language) {
             'en'  => "Hello! I am Tahaffuz, your EPI training assistant. I can answer questions about vaccines, the cold chain, and immunization schedules. How can I help you today?",
-            'rud' => 'Assalam-o-Alaikum! Main Tahaffuz hoon, aapka EPI training assistant. Main vaccine, cold chain, aur immunization schedule ke baare mein sawalon ka jawab de sakta hoon. Aaj main aapki kaise madad karoon?',
+            'fa'  => 'سلام! من «تحفظ» هستم، دستیار آموزشی EPI شما. می‌توانم به پرسش‌های شما درباره واکسن، زنجیره سرد و برنامه واکسیناسیون پاسخ دهم. امروز چطور می‌توانم کمکتان کنم؟',
             'ps'  => 'سلام! زه "تحفظ" یم، ستاسو د EPI روزنې مرستندویه. زه د واکسینونو، کولډ چین، او د واکسینیشن مهالویش په اړه پوښتنو ته ځواب ورکولی شم. نن څنګه مرسته وکړم؟',
             'sd'  => 'السلام عليڪم! مان "تحفظ" آهيان، توهان جو EPI ٽريننگ اسسٽنٽ. مان ويڪسين، ڪولڊ چين، ۽ واڪسينيشن شيڊول بابت سوالن جا جواب ڏئي سگهان ٿو. اڄ ڪيئن مدد ڪريان؟',
             default => 'السلام علیکم! میں "تحفظ" ہوں — آپ کا EPI ٹریننگ معاون۔ میں ویکسین، کولڈ چین، اور حفاظتی ٹیکوں کے شیڈول کے بارے میں سوالات کا جواب دے سکتا ہوں۔ آج میں آپ کی کیسے مدد کروں؟',

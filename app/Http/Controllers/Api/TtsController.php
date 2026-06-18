@@ -315,7 +315,7 @@ class TtsController extends Controller
         if (preg_match('/[ڳڻڪھڀٺٽ۾]/u', $text)) {
             return 'sd';
         }
-        if (in_array($hint, ['en', 'ur', 'rud', 'ps', 'sd'], true)) {
+        if (in_array($hint, ['en', 'ur', 'fa', 'ps', 'sd'], true)) {
             return $hint;
         }
         if (preg_match('/\p{Arabic}/u', $text)) {
@@ -326,20 +326,11 @@ class TtsController extends Controller
     }
 
     /**
-     * Decide what text to actually feed the voice. Urdu script wins regardless
-     * of the hint; Roman Urdu is transliterated to Urdu script; everything else
-     * is spoken verbatim.
+     * Decide what text to actually feed the voice. All supported languages are
+     * spoken verbatim in their own script.
      */
     protected function speechText(string $text, string $lang): string
     {
-        if (preg_match('/\p{Arabic}/u', $text)) {
-            return $text;
-        }
-
-        if ($lang === 'rud') {
-            return $this->gemini->transliterateToUrduScript($text);
-        }
-
         return $text;
     }
 }

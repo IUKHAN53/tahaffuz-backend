@@ -55,7 +55,8 @@ class Whisper
             $langMap = [
                 'ur' => 'ur',
                 'urd' => 'ur',
-                'rud' => 'ur', // Roman Urdu -> Urdu
+                'fa' => 'fa', // Farsi / Persian
+                'persian' => 'fa',
                 'ps' => 'ps',
                 'pashto' => 'ps',
                 'sd' => 'sd',
