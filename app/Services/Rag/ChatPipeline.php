@@ -528,7 +528,9 @@ class ChatPipeline
 
         return match ($language) {
             'ur'  => 'جواب لازمی طور پر اردو رسم الخط میں دیں۔',
-            'fa'  => 'پاسخ را حتماً به زبان فارسی روان بنویسید، نه به اردو.',
+            'fa'  => 'CRITICAL: Reply ONLY in Persian/Farsi using Persian grammar and vocabulary — NEVER Urdu. '
+                .'Use Persian forms like «داده می‌شود، است، باید، این» — NOT Urdu forms like «دی جاتی ہے، ہے، چاہیے، یہ». '
+                .'پاسخ فقط به فارسی روان باشد، نه اردو.',
             'en'  => 'Reply ONLY in English.',
             'ps'  => 'جواب باید په پښتو کې وي.',
             'sd'  => 'جواب سنڌيءَ ۾ هجڻ گهرجي.',
