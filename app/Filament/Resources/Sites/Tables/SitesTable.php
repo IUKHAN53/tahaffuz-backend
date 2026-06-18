@@ -4,6 +4,7 @@ namespace App\Filament\Resources\Sites\Tables;
 
 use App\Models\Site;
 use Filament\Actions\Action;
+use Filament\Actions\ViewAction;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\SelectFilter;
@@ -84,8 +85,10 @@ class SitesTable
                     ->query(fn (Builder $query) => $query->whereNull('latitude')),
             ])
             ->recordActions([
+                ViewAction::make()
+                    ->label('Details'),
                 Action::make('openMap')
-                    ->label('Google Maps')
+                    ->label('Maps')
                     ->icon('heroicon-o-map')
                     ->color('primary')
                     ->url(fn (Site $r): ?string => self::mapUrl($r))
