@@ -54,11 +54,12 @@ return [
     'edge_tts' => [
         'enabled' => (bool) env('RAG_EDGE_TTS_ENABLED', true),
         'binary' => env('EDGE_TTS_BINARY', '/opt/edge-tts/bin/edge-tts'),
+        // All female voices for a consistent assistant voice across languages.
         'voices' => [
             'en' => env('EDGE_TTS_VOICE_EN', 'en-US-AriaNeural'),
             'ur' => env('EDGE_TTS_VOICE_UR', 'ur-PK-UzmaNeural'),
             'fa' => env('EDGE_TTS_VOICE_FA', 'fa-IR-DilaraNeural'),
-            'ps' => env('EDGE_TTS_VOICE_PS', 'ps-AF-GulNawazNeural'),
+            'ps' => env('EDGE_TTS_VOICE_PS', 'ps-AF-LatifaNeural'),
         ],
     ],
 
@@ -68,7 +69,8 @@ return [
     'openai_tts' => [
         'enabled' => (bool) env('RAG_OPENAI_TTS_ENABLED', true),
         'model' => env('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),
-        'voice' => env('OPENAI_TTS_VOICE', 'alloy'),
+        // Female voice (Sindhi + cross-language fallback) to match the rest.
+        'voice' => env('OPENAI_TTS_VOICE', 'nova'),
     ],
 
     'retrieval' => [
