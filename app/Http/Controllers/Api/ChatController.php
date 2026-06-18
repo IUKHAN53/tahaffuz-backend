@@ -78,6 +78,8 @@ class ChatController extends Controller
             'knowledge_base_id' => ['nullable', 'integer'],
             'message' => ['required', 'string', 'min:1', 'max:4000'],
             'language' => ['nullable', 'string', 'in:en,ur,fa,ps,sd'],
+            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
         ]);
 
         $chat = $this->pipeline->findOrCreateChat(
@@ -87,7 +89,7 @@ class ChatController extends Controller
         );
 
         try {
-            $result = $this->pipeline->answerText($chat, trim($data['message']), $data['language'] ?? null);
+            $result = $this->pipeline->answerText($chat, trim($data['message']), $data['language'] ?? null, $this->locationFrom($data));
         } catch (Throwable $e) {
             return $this->serviceError($e, $data['language'] ?? null, $chat->id);
         }
@@ -117,6 +119,8 @@ class ChatController extends Controller
             'knowledge_base_id' => ['nullable', 'integer'],
             'message' => ['required', 'string', 'min:1', 'max:4000'],
             'language' => ['nullable', 'string', 'in:en,ur,fa,ps,sd'],
+            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
         ]);
 
         $chat = $this->pipeline->findOrCreateChat(
@@ -127,8 +131,9 @@ class ChatController extends Controller
 
         $language = $data['language'] ?? null;
         $message = trim($data['message']);
+        $location = $this->locationFrom($data);
 
-        return response()->stream(function () use ($chat, $message, $language) {
+        return response()->stream(function () use ($chat, $message, $language, $location) {
             $send = function (string $event, array $payload): void {
                 echo "event: {$event}\n";
                 echo 'data: '.json_encode($payload, JSON_UNESCAPED_UNICODE)."\n\n";
@@ -146,6 +151,7 @@ class ChatController extends Controller
                     $message,
                     $language,
                     fn (string $delta) => $send('delta', ['text' => $delta]),
+                    $location,
                 );
 
                 $send('done', [
@@ -204,6 +210,22 @@ class ChatController extends Controller
                 'latency_ms' => $result['message']->latency_ms,
             ],
         ]);
+    }
+
+    /**
+     * Build the {lat, lng} location array from validated request data, or null
+     * when the app didn't send coordinates.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array{lat: float, lng: float}|null
+     */
+    protected function locationFrom(array $data): ?array
+    {
+        if (! isset($data['latitude'], $data['longitude'])) {
+            return null;
+        }
+
+        return ['lat' => (float) $data['latitude'], 'lng' => (float) $data['longitude']];
     }
 
     /**

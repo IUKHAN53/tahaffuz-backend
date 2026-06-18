@@ -9,6 +9,7 @@ use App\Models\Message;
 use App\Models\ResponseScript;
 use App\Services\Gemini;
 use App\Services\Pinecone;
+use App\Services\SiteLocator;
 use App\Services\Whisper;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
@@ -22,6 +23,7 @@ class ChatPipeline
     public function __construct(
         protected Gemini $gemini,
         protected VectorStore $store,
+        protected SiteLocator $locator,
     ) {
         // Initialize Pinecone if configured
         if (config('rag.providers.vector_store') === 'pinecone' && config('services.pinecone.api_key')) {
@@ -72,7 +74,7 @@ class ChatPipeline
      * @param  string|null  $language  'en' | 'ur' | 'rud' preference; null = pure auto-detect.
      * @return array{message: Message, citations: array}
      */
-    public function answerText(Chat $chat, string $userText, ?string $language = null): array
+    public function answerText(Chat $chat, string $userText, ?string $language = null, ?array $location = null): array
     {
         $started = microtime(true);
 
@@ -104,6 +106,12 @@ class ChatPipeline
             ]);
             $chat->touch();
             return ['message' => $assistant, 'citations' => []];
+        }
+
+        // "Where is my nearest site?" — answer from the live site data + GPS,
+        // not the training knowledge base.
+        if ($siteAnswer = $this->maybeSiteAnswer($chat, $userText, $effectiveLanguage, $location, $started)) {
+            return $siteAnswer;
         }
 
         // Serve a cached answer for repeated first-turn questions (suggestion
@@ -166,7 +174,7 @@ class ChatPipeline
      * @param  callable(string):void  $onDelta
      * @return array{message: Message, citations: array}
      */
-    public function answerTextStreamed(Chat $chat, string $userText, ?string $language, callable $onDelta): array
+    public function answerTextStreamed(Chat $chat, string $userText, ?string $language, callable $onDelta, ?array $location = null): array
     {
         $started = microtime(true);
 
@@ -197,6 +205,11 @@ class ChatPipeline
             ]);
             $chat->touch();
             return ['message' => $assistant, 'citations' => []];
+        }
+
+        // "Where is my nearest site?" — answer from live site data + GPS.
+        if ($siteAnswer = $this->maybeSiteAnswer($chat, $userText, $effectiveLanguage, $location, $started, $onDelta)) {
+            return $siteAnswer;
         }
 
         // Cached first-turn answer: emit it as a single delta — instant reply.
@@ -728,6 +741,69 @@ class ChatPipeline
      * Check if the query is asking for an introduction/greeting and return
      * the configured script if available. Returns null if not an intro query.
      */
+    /**
+     * Does the question look like it's asking about vaccination sites/locations?
+     * Covers en/ur/fa/ps/sd keywords.
+     */
+    protected function isLocationQuery(string $text): bool
+    {
+        if (preg_match('/\b(site|sites|fix\s?site|fixsite|outreach|cent(er|re)|nearest|near me|where|location|address)\b/iu', $text)) {
+            return true;
+        }
+
+        return (bool) preg_match('/(سائٹ|سینٹر|مرکز|نزدیک|قریب|کہاں|نزدیکی|کیمپ|نږدې|ځای|ويجهو|نزدیک‌ترین|نزدیک ترین|کجا|آدرس|ادرس)/u', $text);
+    }
+
+    /**
+     * If the user asks about sites/locations and we have their GPS, answer from
+     * the live nearest-site data instead of the training knowledge base. Returns
+     * the standard result array, or null to fall through to normal RAG. When an
+     * $onDelta callback is given, the answer is emitted through it for streaming.
+     *
+     * @param  array{lat: float, lng: float}|null  $location
+     * @return array{message: Message, citations: array}|null
+     */
+    protected function maybeSiteAnswer(Chat $chat, string $userText, string $language, ?array $location, float $started, ?callable $onDelta = null): ?array
+    {
+        if (! $location || ! isset($location['lat'], $location['lng']) || ! $this->isLocationQuery($userText)) {
+            return null;
+        }
+
+        $siteContext = $this->locator->nearestContext((float) $location['lat'], (float) $location['lng']);
+        if ($siteContext === '') {
+            return null;
+        }
+
+        $reply = $this->gemini->generate(
+            $this->systemPrompt($language),
+            $this->history($chat, exclude: 1),
+            $userText,
+            $siteContext,
+            $this->replyInstruction($userText, $language),
+        );
+
+        $text = $this->sanitizeAnswer($reply['text']);
+        if ($text === '') {
+            $text = $this->refusalText($language, $userText);
+        }
+
+        if ($onDelta) {
+            $onDelta($text);
+        }
+
+        $assistant = Message::create([
+            'chat_id' => $chat->id,
+            'role' => Message::ROLE_ASSISTANT,
+            'content' => $text,
+            'citations' => [],
+            'meta' => ['source' => 'location', 'language' => $language] + ($onDelta ? ['streamed' => true] : []),
+            'latency_ms' => (int) ((microtime(true) - $started) * 1000),
+        ]);
+        $chat->touch();
+
+        return ['message' => $assistant, 'citations' => []];
+    }
+
     protected function maybeIntroduction(string $userText, ?string $language): ?string
     {
         $text = mb_strtolower(trim($userText));

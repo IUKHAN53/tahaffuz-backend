@@ -1,12 +1,15 @@
 <?php
 
+use App\Http\Controllers\Api\AreaController;
 use App\Http\Controllers\Api\BookmarkController;
 use App\Http\Controllers\Api\ChatController;
 use App\Http\Controllers\Api\FeedbackController;
 use App\Http\Controllers\Api\PushTokenController;
 use App\Http\Controllers\Api\QuickAnswersController;
 use App\Http\Controllers\Api\SearchController;
+use App\Http\Controllers\Api\SiteController;
 use App\Http\Controllers\Api\TtsController;
+use App\Http\Controllers\Api\WorkerController;
 use App\Models\KnowledgeBase;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -64,6 +67,14 @@ Route::prefix('search')->middleware('throttle:30,1')->group(function () {
 
 // Offline quick answers (cached Q&A pairs)
 Route::get('/quick-answers', [QuickAnswersController::class, 'index'])->middleware('throttle:10,1');
+
+// Registration + area hierarchy (onboarding)
+Route::get('/areas', [AreaController::class, 'index'])->middleware('throttle:30,1');
+Route::post('/register', [WorkerController::class, 'register'])->middleware('throttle:20,1');
+Route::get('/worker', [WorkerController::class, 'show'])->middleware('throttle:60,1');
+
+// Nearest vaccination sites by GPS
+Route::get('/sites/nearest', [SiteController::class, 'nearest'])->middleware('throttle:60,1');
 
 // Push notification endpoints
 Route::prefix('push')->middleware('throttle:30,1')->group(function () {
