@@ -61,6 +61,34 @@ class SiteLocator
         return "USER'S NEAREST VACCINATION SITES (based on their current location):\n".implode("\n", $lines);
     }
 
+    /**
+     * Context block listing the vaccination sites in a given union council —
+     * used when we don't have the worker's GPS but know their registered UC.
+     */
+    public function ucContext(string $unionCouncil, int $limit = 8): string
+    {
+        $sites = Site::query()
+            ->where('union_council', $unionCouncil)
+            ->orderByRaw('CASE WHEN outreach_site IS NULL OR outreach_site = ? THEN 0 ELSE 1 END', ['Fixed Site'])
+            ->limit($limit)
+            ->get();
+
+        if ($sites->isEmpty()) {
+            return '';
+        }
+
+        $lines = [];
+        foreach ($sites as $s) {
+            $name = $s->outreach_site && $s->outreach_site !== 'Fixed Site'
+                ? "{$s->fix_site} — {$s->outreach_site}"
+                : $s->fix_site;
+            $coords = $s->latitude !== null ? " — coordinates {$s->latitude},{$s->longitude}" : '';
+            $lines[] = "- {$name} (UC {$s->union_council}, {$s->district}){$coords}";
+        }
+
+        return "VACCINATION SITES IN THE USER'S UNION COUNCIL ({$unionCouncil}):\n".implode("\n", $lines);
+    }
+
     protected function haversineKm(float $lat1, float $lng1, float $lat2, float $lng2): float
     {
         $earth = 6371.0; // km

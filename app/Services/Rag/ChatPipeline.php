@@ -7,6 +7,7 @@ use App\Models\Chunk;
 use App\Models\KnowledgeBase;
 use App\Models\Message;
 use App\Models\ResponseScript;
+use App\Models\Worker;
 use App\Services\Gemini;
 use App\Services\Pinecone;
 use App\Services\SiteLocator;
@@ -747,11 +748,13 @@ class ChatPipeline
      */
     protected function isLocationQuery(string $text): bool
     {
-        if (preg_match('/\b(site|sites|fix\s?site|fixsite|outreach|cent(er|re)|nearest|near me|where|location|address)\b/iu', $text)) {
+        // Site/centre/nearest keywords — deliberately NOT bare "where", which
+        // matches knowledge-base questions ("where is polio given?").
+        if (preg_match('/\b(site|sites|fix\s?site|fixsite|outreach|cent(er|re)|clinic|nearest|near\s?(me|by)|vaccination\s+(point|place|location))\b/iu', $text)) {
             return true;
         }
 
-        return (bool) preg_match('/(سائٹ|سینٹر|مرکز|نزدیک|قریب|کہاں|نزدیکی|کیمپ|نږدې|ځای|ويجهو|نزدیک‌ترین|نزدیک ترین|کجا|آدرس|ادرس)/u', $text);
+        return (bool) preg_match('/(سائٹ|سینٹر|سنٹر|مرکز|ویکسینیشن مرکز|نزدیک|قریب|نزدیکی|کیمپ|کلینک|نږدې|واکسین مرکز|نزدیک‌ترین|نزدیک ترین|مرکز نزدیک)/u', $text);
     }
 
     /**
@@ -765,11 +768,22 @@ class ChatPipeline
      */
     protected function maybeSiteAnswer(Chat $chat, string $userText, string $language, ?array $location, float $started, ?callable $onDelta = null): ?array
     {
-        if (! $location || ! isset($location['lat'], $location['lng']) || ! $this->isLocationQuery($userText)) {
+        if (! $this->isLocationQuery($userText)) {
             return null;
         }
 
-        $siteContext = $this->locator->nearestContext((float) $location['lat'], (float) $location['lng']);
+        // Prefer GPS (exact nearest). If we have no fix, fall back to the sites
+        // in the worker's registered union council so the answer still works.
+        $siteContext = '';
+        if ($location && isset($location['lat'], $location['lng'])) {
+            $siteContext = $this->locator->nearestContext((float) $location['lat'], (float) $location['lng']);
+        }
+        if ($siteContext === '') {
+            $worker = Worker::where('device_id', $chat->device_id)->first();
+            if ($worker && $worker->union_council) {
+                $siteContext = $this->locator->ucContext($worker->union_council);
+            }
+        }
         if ($siteContext === '') {
             return null;
         }
