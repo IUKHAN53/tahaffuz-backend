@@ -445,6 +445,81 @@ class Gemini
      * callers that don't need retrieval grounding; the chat pipeline uses the
      * transcribe-then-generate path instead.
      */
+    /**
+     * Read a photographed EPI child immunization card with Gemini Vision and
+     * return the structured fields. Dates are handwritten so extraction is
+     * best-effort — the app shows the result for the worker to correct.
+     *
+     * @return array<string, mixed>
+     */
+    public function extractCardData(string $imagePath, string $imageMime): array
+    {
+        $bytes = @file_get_contents($imagePath);
+        if ($bytes === false) {
+            throw new RuntimeException("Cannot read image file: {$imagePath}");
+        }
+
+        $model = (string) (config('rag.gemini.vision_model') ?: $this->chatModel);
+        $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
+
+        $prompt = 'This is a Pakistani EPI child immunization card (bilingual Urdu/English). '
+            .'Extract its details into JSON. The right page has the child/guardian info and card number; '
+            .'the left grid lists vaccines (OPV-0, Hep B, BCG, OPV-1, Rota-1, PCV-1, Penta-1, OPV-2, Rota-2, '
+            .'PCV-2, Penta-2, OPV-3, IPV-1, PCV-3, Penta-3, IPV-2, Typhoid, MR-1, MR-2), each with a '
+            .'handwritten VACCINATION DATE (given) and NEXT VACCINATION DATE (due). Read the handwritten '
+            .'dates as best you can, formatted DD/MM/YY. Only include vaccines that have a date written. '
+            .'sex is "boy" or "girl" (لڑکا = boy, لڑکی = girl). For any field you cannot read, use an empty string.';
+
+        $resp = $this->postWithRetry($url, [
+            'contents' => [[
+                'role' => 'user',
+                'parts' => [
+                    ['text' => $prompt],
+                    ['inlineData' => [
+                        'mimeType' => $imageMime,
+                        'data' => base64_encode($bytes),
+                    ]],
+                ],
+            ]],
+            'generationConfig' => [
+                'temperature' => 0.0,
+                'maxOutputTokens' => 2048,
+                'responseMimeType' => 'application/json',
+                'responseSchema' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'child_name' => ['type' => 'string'],
+                        'sex' => ['type' => 'string'],
+                        'date_of_birth' => ['type' => 'string'],
+                        'father_name' => ['type' => 'string'],
+                        'mother_name' => ['type' => 'string'],
+                        'card_number' => ['type' => 'string'],
+                        'district' => ['type' => 'string'],
+                        'town' => ['type' => 'string'],
+                        'union_council' => ['type' => 'string'],
+                        'next_due_date' => ['type' => 'string'],
+                        'vaccines' => [
+                            'type' => 'array',
+                            'items' => [
+                                'type' => 'object',
+                                'properties' => [
+                                    'name' => ['type' => 'string'],
+                                    'given_date' => ['type' => 'string'],
+                                    'due_date' => ['type' => 'string'],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+        ], maxAttempts: 3, maxWaitMs: 12000);
+
+        $raw = $resp->json('candidates.0.content.parts.0.text', '{}');
+        $parsed = json_decode((string) $raw, true);
+
+        return is_array($parsed) ? $parsed : [];
+    }
+
     public function generateFromAudio(string $systemPrompt, string $audioPath, string $audioMime, string $context): array
     {
         $bytes = @file_get_contents($audioPath);

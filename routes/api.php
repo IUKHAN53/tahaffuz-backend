@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\AreaController;
 use App\Http\Controllers\Api\BookmarkController;
+use App\Http\Controllers\Api\CardController;
 use App\Http\Controllers\Api\ChatController;
 use App\Http\Controllers\Api\FeedbackController;
 use App\Http\Controllers\Api\PushTokenController;
@@ -75,6 +76,11 @@ Route::get('/worker', [WorkerController::class, 'show'])->middleware('throttle:6
 
 // Nearest vaccination sites by GPS
 Route::get('/sites/nearest', [SiteController::class, 'nearest'])->middleware('throttle:60,1');
+
+// Vaccination card scanner: extract → review → store → current child
+Route::post('/card/scan', [CardController::class, 'scan'])->middleware('throttle:20,1');
+Route::post('/card', [CardController::class, 'store'])->middleware('throttle:30,1');
+Route::get('/card', [CardController::class, 'show'])->middleware('throttle:60,1');
 
 // Push notification endpoints
 Route::prefix('push')->middleware('throttle:30,1')->group(function () {

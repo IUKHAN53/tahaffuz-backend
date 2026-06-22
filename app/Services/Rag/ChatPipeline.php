@@ -7,6 +7,7 @@ use App\Models\Chunk;
 use App\Models\KnowledgeBase;
 use App\Models\Message;
 use App\Models\ResponseScript;
+use App\Models\VaccinationCard;
 use App\Models\Worker;
 use App\Services\Gemini;
 use App\Services\Pinecone;
@@ -115,6 +116,11 @@ class ChatPipeline
             return $siteAnswer;
         }
 
+        // "What's pending for this child?" — answer from the scanned card.
+        if ($cardAnswer = $this->maybeCardAnswer($chat, $userText, $effectiveLanguage, $started)) {
+            return $cardAnswer;
+        }
+
         // Serve a cached answer for repeated first-turn questions (suggestion
         // cards and FAQs) — skips embed + retrieval + generation entirely.
         if ($cached = $this->cachedAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn)) {
@@ -211,6 +217,11 @@ class ChatPipeline
         // "Where is my nearest site?" — answer from live site data + GPS.
         if ($siteAnswer = $this->maybeSiteAnswer($chat, $userText, $effectiveLanguage, $location, $started, $onDelta)) {
             return $siteAnswer;
+        }
+
+        // "What's pending for this child?" — answer from the scanned card.
+        if ($cardAnswer = $this->maybeCardAnswer($chat, $userText, $effectiveLanguage, $started, $onDelta)) {
+            return $cardAnswer;
         }
 
         // Cached first-turn answer: emit it as a single delta — instant reply.
@@ -742,6 +753,91 @@ class ChatPipeline
      * Check if the query is asking for an introduction/greeting and return
      * the configured script if available. Returns null if not an intro query.
      */
+    /**
+     * Is the question about the scanned child's own vaccination status (what's
+     * given / pending / next due), as opposed to general vaccine knowledge?
+     */
+    protected function isCardQuery(string $text): bool
+    {
+        if (preg_match('/\b(pending|overdue|missed|due|next\s+(vaccine|dose|shot|jab)|this child|child\'?s|up[\s-]?to[\s-]?date|remaining vaccines?|which vaccines?)\b/iu', $text)) {
+            return true;
+        }
+
+        return (bool) preg_match('/(اس بچے|بچے کا|بچے کے|اگلا ٹیکہ|اگلے ٹیکے|باقی ٹیکے|کونسا ٹیکہ|کونسے ٹیکے|رہتے ٹیکے|واکسین بعدی|واکسن بعدی|ماشوم|پاتې واکسین)/u', $text);
+    }
+
+    /**
+     * Answer from the scanned child's card when the worker asks about that
+     * child's vaccination status. Returns null to fall through to normal RAG.
+     *
+     * @return array{message: Message, citations: array}|null
+     */
+    protected function maybeCardAnswer(Chat $chat, string $userText, string $language, float $started, ?callable $onDelta = null): ?array
+    {
+        if (! $this->isCardQuery($userText)) {
+            return null;
+        }
+
+        $card = VaccinationCard::where('device_id', $chat->device_id)->latest()->first();
+        if (! $card) {
+            return null;
+        }
+
+        $context = $this->cardContext($card);
+
+        $reply = $this->gemini->generate(
+            $this->systemPrompt($language),
+            $this->history($chat, exclude: 1),
+            $userText,
+            $context,
+            $this->replyInstruction($userText, $language),
+        );
+
+        $text = $this->sanitizeAnswer($reply['text']);
+        if ($onDelta) {
+            $onDelta($text !== '' ? $text : $this->refusalText($language, $userText));
+        }
+
+        $assistant = Message::create([
+            'chat_id' => $chat->id,
+            'role' => Message::ROLE_ASSISTANT,
+            'content' => $text !== '' ? $text : $this->refusalText($language, $userText),
+            'citations' => [],
+            'meta' => ['source' => 'card', 'language' => $language] + ($onDelta ? ['streamed' => true] : []),
+            'latency_ms' => (int) ((microtime(true) - $started) * 1000),
+        ]);
+        $chat->touch();
+
+        return ['message' => $assistant, 'citations' => []];
+    }
+
+    /** Build the prompt context describing a scanned child's card. */
+    protected function cardContext(VaccinationCard $card): string
+    {
+        $lines = ['THIS CHILD\'S VACCINATION CARD:'];
+        $lines[] = 'Child: '.($card->child_name ?: 'unknown').' | Sex: '.($card->sex ?: '—').' | DOB: '.($card->date_of_birth ?: '—');
+        $given = [];
+        foreach ((array) $card->vaccines as $v) {
+            $name = trim((string) ($v['name'] ?? ''));
+            if ($name === '') {
+                continue;
+            }
+            $g = trim((string) ($v['given_date'] ?? ''));
+            $given[] = $g !== '' ? "{$name} (given {$g})" : $name;
+        }
+        $lines[] = 'Vaccines already received: '.($given ? implode(', ', $given) : 'none recorded');
+        if ($card->next_due_date) {
+            $lines[] = 'Next due date on card: '.$card->next_due_date;
+        }
+        $lines[] = '';
+        $lines[] = 'INSTRUCTION: Using the standard Pakistan EPI schedule (OPV-0/HepB/BCG at birth; '
+            .'OPV/Rota/PCV/Penta-1 at 6 weeks; -2 at 10 weeks; OPV-3/IPV-1/PCV-3/Penta-3 at 14 weeks; '
+            .'IPV-2/Typhoid/MR-1 at 9 months; MR-2 at 15 months) and the card above, tell the worker which '
+            .'vaccines this child has had, which are still pending, and what to give next. Be concise.';
+
+        return implode("\n", $lines);
+    }
+
     /**
      * Does the question look like it's asking about vaccination sites/locations?
      * Covers en/ur/fa/ps/sd keywords.
