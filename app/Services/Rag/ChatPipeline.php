@@ -788,6 +788,13 @@ class ChatPipeline
             return null;
         }
 
+        // Tell the model to PRESENT these sites as the answer (with names and
+        // areas), not ask the user for their location — these already are the
+        // user's local/nearest sites.
+        $siteContext = "INSTRUCTION: The user is asking where to get vaccinated. Using ONLY the list "
+            ."below, tell them their nearest/available vaccination site(s) with the site name and area. "
+            ."List 2-3 of them. Do NOT ask the user for their location.\n\n".$siteContext;
+
         $reply = $this->gemini->generate(
             $this->systemPrompt($language),
             $this->history($chat, exclude: 1),
