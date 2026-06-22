@@ -462,13 +462,18 @@ class Gemini
         $model = (string) (config('rag.gemini.vision_model') ?: $this->chatModel);
         $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
 
-        $prompt = 'This is a Pakistani EPI child immunization card (bilingual Urdu/English). '
-            .'Extract its details into JSON. The right page has the child/guardian info and card number; '
-            .'the left grid lists vaccines (OPV-0, Hep B, BCG, OPV-1, Rota-1, PCV-1, Penta-1, OPV-2, Rota-2, '
-            .'PCV-2, Penta-2, OPV-3, IPV-1, PCV-3, Penta-3, IPV-2, Typhoid, MR-1, MR-2), each with a '
-            .'handwritten VACCINATION DATE (given) and NEXT VACCINATION DATE (due). Read the handwritten '
-            .'dates as best you can, formatted DD/MM/YY. Only include vaccines that have a date written. '
-            .'sex is "boy" or "girl" (لڑکا = boy, لڑکی = girl). For any field you cannot read, use an empty string.';
+        $prompt = 'FIRST, decide whether this image clearly shows a Pakistani EPI child immunization / '
+            .'vaccination card (the bilingual Urdu/English card with a coloured vaccine grid listing OPV, '
+            .'BCG, Penta, PCV, Rota, IPV, MR, etc.). Set "is_card" to true ONLY if it clearly is such a card. '
+            .'If it is anything else — a person, a different document, a screenshot, a random photo — set '
+            .'"is_card" to false and leave every other field empty.'."\n\n"
+            .'If it IS a card, extract its details into JSON. The right page has the child/guardian info and '
+            .'card number; the left grid lists vaccines (OPV-0, Hep B, BCG, OPV-1, Rota-1, PCV-1, Penta-1, '
+            .'OPV-2, Rota-2, PCV-2, Penta-2, OPV-3, IPV-1, PCV-3, Penta-3, IPV-2, Typhoid, MR-1, MR-2), each '
+            .'with a handwritten VACCINATION DATE (given) and NEXT VACCINATION DATE (due). Read the '
+            .'handwritten dates as best you can, formatted DD/MM/YY. Only include vaccines that have a date '
+            .'written. sex is "boy" or "girl" (لڑکا = boy, لڑکی = girl). For any field you cannot read, use '
+            .'an empty string.';
 
         $resp = $this->postWithRetry($url, [
             'contents' => [[
@@ -488,6 +493,7 @@ class Gemini
                 'responseSchema' => [
                     'type' => 'object',
                     'properties' => [
+                        'is_card' => ['type' => 'boolean'],
                         'child_name' => ['type' => 'string'],
                         'sex' => ['type' => 'string'],
                         'date_of_birth' => ['type' => 'string'],

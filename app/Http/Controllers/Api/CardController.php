@@ -36,9 +36,19 @@ class CardController extends Controller
             $extracted = $this->gemini->extractCardData(Storage::disk('local')->path($path), $mime);
         } catch (Throwable $e) {
             Log::error('Card extraction failed', ['error' => $e->getMessage()]);
+            Storage::disk('local')->delete($path);
 
             return response()->json(['error' => 'extract_failed'], 503);
         }
+
+        // Restrict the scanner to actual vaccination cards: if the image isn't
+        // one, drop it and tell the app — nothing is read or stored.
+        if (empty($extracted['is_card'])) {
+            Storage::disk('local')->delete($path);
+
+            return response()->json(['error' => 'not_a_card'], 422);
+        }
+        unset($extracted['is_card']);
 
         return response()->json([
             'image_path' => $path,
