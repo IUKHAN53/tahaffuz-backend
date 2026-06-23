@@ -533,7 +533,7 @@ class ChatPipeline
         if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText)) {
             return 'جواب لازماً په روان پښتو کې ولیکئ، نه په اردو کې.';
         }
-        if (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
+        if (preg_match('/[ڳڻڪڀٺٽ]/u', $userText)) {
             return 'جواب لازمي طور تي سنڌيءَ ۾ لکو، اردوءَ ۾ نه.';
         }
 
@@ -576,7 +576,7 @@ class ChatPipeline
         if ($userText !== null && $userText !== '' && preg_match('/\p{Arabic}/u', $userText)) {
             if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText)) {
                 $detectedLang = 'ps';
-            } elseif (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
+            } elseif (preg_match('/[ڳڻڪڀٺٽ]/u', $userText)) {
                 $detectedLang = 'sd';
             } elseif (! in_array($language, ['ps', 'sd'], true)) {
                 // Keep a ps/sd preference; otherwise Arabic script means Urdu.
@@ -643,7 +643,7 @@ class ChatPipeline
      *
      * Priority:
      * 1. Pashto script (has unique characters like ټډړږښځڅېګڼ)
-     * 2. Sindhi script (has unique characters like ڳڻڪھڀٺٽ)
+     * 2. Sindhi script (has unique characters like ڳڻڪڀٺٽ)
      * 3. Other Arabic scripts (Farsi, Punjabi Shahmukhi, Arabic, etc.) → 'auto'
      * 4. Urdu script (if app preference is ur)
      * 5. App preference (for Latin text: en vs rud)
@@ -700,7 +700,7 @@ class ChatPipeline
         if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText) || $this->hasPashtoMarkers($userText)) {
             return 'ps';
         }
-        if (preg_match('/[ڳڻڪھڀٺٽ۾]/u', $userText) || $this->hasSindhiMarkers($userText)) {
+        if (preg_match('/[ڳڻڪڀٺٽ۾]/u', $userText) || $this->hasSindhiMarkers($userText)) {
             return 'sd';
         }
 
@@ -966,7 +966,7 @@ class ChatPipeline
         if (preg_match('/\p{Arabic}/u', $userText)) {
             if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText)) {
                 $detectedLang = 'ps';
-            } elseif (preg_match('/[ڳڻڪھڀٺٽ]/u', $userText)) {
+            } elseif (preg_match('/[ڳڻڪڀٺٽ]/u', $userText)) {
                 $detectedLang = 'sd';
             } elseif (! in_array($language, ['ps', 'sd'], true)) {
                 $detectedLang = 'ur';
