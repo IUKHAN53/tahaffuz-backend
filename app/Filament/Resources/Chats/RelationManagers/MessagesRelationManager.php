@@ -51,24 +51,20 @@ class MessagesRelationManager extends RelationManager
                 // matching section within it; score is the semantic match strength.
                 TextColumn::make('citations')
                     ->label('Source module · section')
-                    ->listWithLineBreaks()
-                    ->bulleted()
-                    ->limitList(3)
-                    ->expandableLimitedList()
-                    ->placeholder('— (not from a document)')
-                    ->state(function ($record) {
-                        $cites = $record->citations;
-                        if (! is_array($cites) || empty($cites)) {
-                            return null;
+                    ->html()
+                    ->wrap()
+                    ->formatStateUsing(function ($state) {
+                        if (! is_array($state) || empty($state)) {
+                            return '<span style="color:rgb(156 163 175)">— (not from a document)</span>';
                         }
 
-                        return collect($cites)->map(function ($c) {
-                            $title = $c['document_title'] ?? ('Document #' . ($c['document_id'] ?? '?'));
-                            $section = isset($c['ordinal']) ? ' · §' . $c['ordinal'] : '';
+                        return collect($state)->take(4)->map(function ($c) {
+                            $title = e($c['document_title'] ?? ('Document #' . ($c['document_id'] ?? '?')));
+                            $section = isset($c['ordinal']) ? ' · §' . e((string) $c['ordinal']) : '';
                             $score = isset($c['score']) ? ' · ' . round(((float) $c['score']) * 100) . '% match' : '';
 
-                            return $title . $section . $score;
-                        })->all();
+                            return '• ' . $title . '<span style="color:rgb(107 114 128)">' . $section . $score . '</span>';
+                        })->implode('<br>');
                     }),
                 TextColumn::make('latency_ms')
                     ->label('ms')
