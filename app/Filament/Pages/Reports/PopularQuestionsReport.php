@@ -35,7 +35,7 @@ class PopularQuestionsReport extends Page implements HasTable
             ->query(
                 Message::query()
                     ->where('role', 'user')
-                    ->selectRaw('content, COUNT(*) as question_count')
+                    ->selectRaw('MIN(id) as id, content, COUNT(*) as question_count')
                     ->groupBy('content')
                     ->orderByDesc('question_count')
             )

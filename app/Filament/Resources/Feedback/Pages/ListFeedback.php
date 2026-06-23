@@ -5,7 +5,7 @@ namespace App\Filament\Resources\Feedback\Pages;
 use App\Filament\Resources\Feedback\FeedbackResource;
 use App\Models\MessageFeedback;
 use Filament\Resources\Pages\ListRecords;
-use Filament\Resources\Components\Tab;
+use Filament\Schemas\Components\Tabs\Tab;
 use Illuminate\Database\Eloquent\Builder;
 
 class ListFeedback extends ListRecords
