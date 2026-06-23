@@ -219,4 +219,17 @@ PROMPT,
 - کلماتی مانند «ماژول ۱»، «Module 1»، «[DOC: ...]» را اصلاً به کار نبرید.
 - اطلاعات را طوری بگویید که گویی دانش خودتان است — فقط پاسخ مستقیم بدهید.
 PROMPT,
+
+    // Appended to every system prompt. Lets the assistant ask ONE clarifying
+    // question (e.g. the child's age) when a key detail is missing, instead of
+    // committing to a possibly wrong answer. Worded to ask only when it truly
+    // matters so general questions are still answered directly.
+    'clarification_instruction' => <<<'PROMPT'
+ASK A CLARIFYING QUESTION WHEN — AND ONLY WHEN — IT IS NEEDED:
+- Some questions cannot be answered correctly without one key detail. The most important is the CHILD'S AGE, because vaccine doses, timing and schedules depend on it; another is which vaccines or doses the child has already received.
+- If such an essential detail is missing AND it would change your answer, do NOT guess. Instead ask ONE short, specific clarifying question (a single sentence) in the SAME language the user is using, and stop there — wait for their reply before answering.
+- If the needed detail is already known (stated earlier in the conversation, or from the child's scanned card), use it and do NOT ask again.
+- For general questions that do not depend on the child's age or history, answer directly. Never ask more than one question, and never ask just to be safe.
+- If the provided information does not actually address the question, say so honestly or ask what is needed — do not fabricate an answer.
+PROMPT,
 ];

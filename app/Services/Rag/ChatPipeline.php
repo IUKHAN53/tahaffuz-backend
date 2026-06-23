@@ -510,7 +510,7 @@ class ChatPipeline
         $basePrompt = (string) config('rag.system_prompt_ur');
 
         // Use dedicated prompts for Pashto and Sindhi to ensure proper translation
-        return match ($language) {
+        $prompt = match ($language) {
             'ps'  => (string) config('rag.system_prompt_ps', $basePrompt),
             'sd'  => (string) config('rag.system_prompt_sd', $basePrompt),
             'fa'  => (string) config('rag.system_prompt_fa', $basePrompt),
@@ -518,6 +518,15 @@ class ChatPipeline
             'auto' => $basePrompt . "\n\nIMPORTANT: Detect the language of the user's question and respond in that SAME language. The knowledge base is in Urdu, so understand the Urdu content first, then formulate a natural response in the user's language. Do NOT translate word-by-word - provide natural, fluent responses. Supported languages include but are not limited to: Farsi/Persian, Punjabi, Arabic, Hindi, Turkish, Bengali, and others.",
             default => $basePrompt,
         };
+
+        // Let the assistant ask for a missing key detail (e.g. the child's age)
+        // instead of committing to a wrong answer.
+        $clarify = trim((string) config('rag.clarification_instruction', ''));
+        if ($clarify !== '') {
+            $prompt .= "\n\n" . $clarify;
+        }
+
+        return $prompt;
     }
 
     /**
