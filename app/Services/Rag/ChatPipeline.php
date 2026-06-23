@@ -4,6 +4,7 @@ namespace App\Services\Rag;
 
 use App\Models\Chat;
 use App\Models\Chunk;
+use App\Models\Document;
 use App\Models\KnowledgeBase;
 use App\Models\Message;
 use App\Models\ResponseScript;
@@ -136,14 +137,12 @@ class ChatPipeline
             return ['message' => $assistant, 'citations' => $cached['citations']];
         }
 
-        $hits = $this->retrieve($chat->knowledge_base_id, $this->retrievalQuery($chat, $userText));
+        [$context, $citations, $weak] = $this->gatherContext($chat, $userText);
 
-        if ($this->isWeak($hits, $userText)) {
+        if ($weak) {
             $assistant = $this->refuse($chat, $started, language: $effectiveLanguage, userText: $userText);
             return ['message' => $assistant, 'citations' => []];
         }
-
-        [$context, $citations] = $this->buildContext($hits);
         $history = $this->history($chat, exclude: 1);
 
         $reply = $this->gemini->generate(
@@ -239,16 +238,14 @@ class ChatPipeline
             return ['message' => $assistant, 'citations' => $cached['citations']];
         }
 
-        $hits = $this->retrieve($chat->knowledge_base_id, $this->retrievalQuery($chat, $userText));
+        [$context, $citations, $weak] = $this->gatherContext($chat, $userText);
 
-        if ($this->isWeak($hits, $userText)) {
+        if ($weak) {
             $refusal = $this->refusalText($effectiveLanguage, $userText);
             $onDelta($refusal);
             $assistant = $this->refuse($chat, $started, language: $effectiveLanguage, userText: $userText);
             return ['message' => $assistant, 'citations' => []];
         }
-
-        [$context, $citations] = $this->buildContext($hits);
         $history = $this->history($chat, exclude: 1);
 
         $full = '';
@@ -340,14 +337,12 @@ class ChatPipeline
             return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript];
         }
 
-        $hits = $this->retrieve($chat->knowledge_base_id, $this->retrievalQuery($chat, $transcript));
+        [$context, $citations, $weak] = $this->gatherContext($chat, $transcript);
 
-        if ($this->isWeak($hits, $transcript)) {
+        if ($weak) {
             $assistant = $this->refuse($chat, $started, 'voice', language: $effectiveLanguage, userText: $transcript);
             return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript];
         }
-
-        [$context, $citations] = $this->buildContext($hits);
         $history = $this->history($chat, exclude: 1);
 
         $reply = $this->gemini->generate(
@@ -423,32 +418,98 @@ class ChatPipeline
      * @return array<int, array{chunk: \App\Models\Chunk, score: float, vec_score?: float, kw_score?: float}>
      */
     /**
-     * The text to embed for retrieval. A full question retrieves well on its
-     * own, but a short follow-up — typically the answer to a clarifying
-     * question ("6 weeks old", "yes", "the second dose") — carries no topical
-     * keywords, so on its own it routes to the wrong module and the assistant
-     * keeps re-asking. For such short turns we prepend the recent prior user
-     * messages so the embedding still lands on the intended module.
+     * Gather the grounding context for a turn, returning [context, citations,
+     * weak]. Normally this is embedding retrieval over the question. But when
+     * the user sends a short follow-up that answers a clarifying question, a
+     * keyword-less reply like "6 weeks old" mis-routes on its own — so we reuse
+     * the module the previous (clarifying) turn was grounded on, keeping the
+     * topic fixed so the answer can finally be given.
+     *
+     * @return array{0: string, 1: array, 2: bool}
      */
-    protected function retrievalQuery(Chat $chat, string $currentText): string
+    protected function gatherContext(Chat $chat, string $userText): array
+    {
+        $reuseIds = $this->followUpModuleIds($chat, $userText);
+        if (! empty($reuseIds)) {
+            [$context, $citations] = $this->buildModuleContextFor($reuseIds);
+            if ($context !== '') {
+                return [$context, $citations, false];
+            }
+        }
+
+        $hits = $this->retrieve($chat->knowledge_base_id, $userText);
+        if ($this->isWeak($hits, $userText)) {
+            return ['', [], true];
+        }
+        [$context, $citations] = $this->buildContext($hits);
+
+        return [$context, $citations, false];
+    }
+
+    /**
+     * Module ids to reuse for a short follow-up. Only fires when the previous
+     * assistant turn was itself a clarifying QUESTION (so a short topic switch
+     * like "cold chain?" is not wrongly pinned to the old module).
+     *
+     * @return array<int, int>
+     */
+    protected function followUpModuleIds(Chat $chat, string $currentText): array
     {
         $words = preg_split('/\s+/u', trim($currentText), -1, PREG_SPLIT_NO_EMPTY) ?: [];
         if (count($words) > 6) {
-            return $currentText;
+            return [];
         }
 
-        $prior = $chat->messages()
-            ->where('role', Message::ROLE_USER)
+        $prev = $chat->messages()
+            ->where('role', Message::ROLE_ASSISTANT)
             ->orderByDesc('id')
-            ->skip(1) // the current user message was just stored — skip it
-            ->take(2)
-            ->pluck('content')
-            ->reverse()
-            ->implode(' ');
+            ->first();
 
-        $prior = trim($prior);
+        $content = (string) ($prev->content ?? '');
+        $askedQuestion = str_contains($content, '?') || str_contains($content, '؟');
 
-        return $prior === '' ? $currentText : $prior . ' ' . $currentText;
+        if (! $prev || ! $askedQuestion || ! is_array($prev->citations) || empty($prev->citations)) {
+            return [];
+        }
+
+        $max = max(1, (int) config('rag.retrieval.max_modules', 1));
+
+        return collect($prev->citations)
+            ->pluck('document_id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->take($max)
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Build context (and citations) from explicit module ids — used to reuse a
+     * prior turn's grounding for a clarification follow-up.
+     *
+     * @param  array<int, int>  $documentIds
+     * @return array{0: string, 1: array}
+     */
+    protected function buildModuleContextFor(array $documentIds): array
+    {
+        $blocks = [];
+        $citations = [];
+        foreach ($documentIds as $docId) {
+            $text = $this->moduleText((int) $docId);
+            if ($text === '') {
+                continue;
+            }
+            $doc = Document::find($docId);
+            $blocks[] = $text;
+            $citations[] = [
+                'document_id' => (int) $docId,
+                'document_title' => $doc?->title ?? "Doc {$docId}",
+                'reused' => true,
+            ];
+        }
+
+        return [implode("\n\n---\n\n", $blocks), $citations];
     }
 
     protected function retrieve(int $knowledgeBaseId, string $query): array
