@@ -429,15 +429,26 @@ class ChatPipeline
      */
     protected function gatherContext(Chat $chat, string $userText): array
     {
-        $reuseIds = $this->followUpModuleIds($chat, $userText);
-        if (! empty($reuseIds)) {
-            [$context, $citations] = $this->buildModuleContextFor($reuseIds);
-            if ($context !== '') {
-                return [$context, $citations, false];
+        $hits = $this->retrieve($chat->knowledge_base_id, $userText);
+        $topScore = (float) ($hits[0]['score'] ?? 0.0);
+
+        // A short follow-up — typically the answer to a clarifying question
+        // ("6 weeks old") — has no topical keywords, so it routes with low
+        // confidence (well below a real topical match). When that happens,
+        // reuse the module the previous turn was grounded on so the topic
+        // stays put and the pending answer can finally be given.
+        $words = preg_split('/\s+/u', trim($userText), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $confident = (float) config('rag.retrieval.confident_score', 0.70);
+        if (count($words) <= 6 && $topScore < $confident) {
+            $reuseIds = $this->priorModuleIds($chat);
+            if (! empty($reuseIds)) {
+                [$ctx, $cits] = $this->buildModuleContextFor($reuseIds);
+                if ($ctx !== '') {
+                    return [$ctx, $cits, false];
+                }
             }
         }
 
-        $hits = $this->retrieve($chat->knowledge_base_id, $userText);
         if ($this->isWeak($hits, $userText)) {
             return ['', [], true];
         }
@@ -447,28 +458,19 @@ class ChatPipeline
     }
 
     /**
-     * Module ids to reuse for a short follow-up. Only fires when the previous
-     * assistant turn was itself a clarifying QUESTION (so a short topic switch
-     * like "cold chain?" is not wrongly pinned to the old module).
+     * Document ids the previous assistant turn was grounded on — reused to keep
+     * a low-confidence short follow-up on the established topic.
      *
      * @return array<int, int>
      */
-    protected function followUpModuleIds(Chat $chat, string $currentText): array
+    protected function priorModuleIds(Chat $chat): array
     {
-        $words = preg_split('/\s+/u', trim($currentText), -1, PREG_SPLIT_NO_EMPTY) ?: [];
-        if (count($words) > 6) {
-            return [];
-        }
-
         $prev = $chat->messages()
             ->where('role', Message::ROLE_ASSISTANT)
             ->orderByDesc('id')
             ->first();
 
-        $content = (string) ($prev->content ?? '');
-        $askedQuestion = str_contains($content, '?') || str_contains($content, '؟');
-
-        if (! $prev || ! $askedQuestion || ! is_array($prev->citations) || empty($prev->citations)) {
+        if (! $prev || ! is_array($prev->citations) || empty($prev->citations)) {
             return [];
         }
 

@@ -77,6 +77,9 @@ return [
         'top_k' => (int) env('VECTOR_TOP_K', 6),
         'candidate_pool' => (int) env('VECTOR_CANDIDATE_POOL', 24),
         'min_score' => (float) env('VECTOR_MIN_SCORE', 0.55),
+        // A short follow-up (e.g. "6 weeks old") that scores below this routed
+        // with low confidence — reuse the previous turn's module instead.
+        'confident_score' => (float) env('RAG_CONFIDENT_SCORE', 0.70),
         'vec_weight' => (float) env('VECTOR_WEIGHT', 0.55),
         'kw_weight' => (float) env('KW_WEIGHT', 0.45),
         // Below this RRF score, treat retrieval as "no useful context" and refuse.
