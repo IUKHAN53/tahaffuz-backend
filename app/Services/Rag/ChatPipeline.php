@@ -136,7 +136,7 @@ class ChatPipeline
             return ['message' => $assistant, 'citations' => $cached['citations']];
         }
 
-        $hits = $this->retrieve($chat->knowledge_base_id, $userText);
+        $hits = $this->retrieve($chat->knowledge_base_id, $this->retrievalQuery($chat, $userText));
 
         if ($this->isWeak($hits, $userText)) {
             $assistant = $this->refuse($chat, $started, language: $effectiveLanguage, userText: $userText);
@@ -239,7 +239,7 @@ class ChatPipeline
             return ['message' => $assistant, 'citations' => $cached['citations']];
         }
 
-        $hits = $this->retrieve($chat->knowledge_base_id, $userText);
+        $hits = $this->retrieve($chat->knowledge_base_id, $this->retrievalQuery($chat, $userText));
 
         if ($this->isWeak($hits, $userText)) {
             $refusal = $this->refusalText($effectiveLanguage, $userText);
@@ -340,7 +340,7 @@ class ChatPipeline
             return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript];
         }
 
-        $hits = $this->retrieve($chat->knowledge_base_id, $transcript);
+        $hits = $this->retrieve($chat->knowledge_base_id, $this->retrievalQuery($chat, $transcript));
 
         if ($this->isWeak($hits, $transcript)) {
             $assistant = $this->refuse($chat, $started, 'voice', language: $effectiveLanguage, userText: $transcript);
@@ -422,6 +422,35 @@ class ChatPipeline
     /**
      * @return array<int, array{chunk: \App\Models\Chunk, score: float, vec_score?: float, kw_score?: float}>
      */
+    /**
+     * The text to embed for retrieval. A full question retrieves well on its
+     * own, but a short follow-up — typically the answer to a clarifying
+     * question ("6 weeks old", "yes", "the second dose") — carries no topical
+     * keywords, so on its own it routes to the wrong module and the assistant
+     * keeps re-asking. For such short turns we prepend the recent prior user
+     * messages so the embedding still lands on the intended module.
+     */
+    protected function retrievalQuery(Chat $chat, string $currentText): string
+    {
+        $words = preg_split('/\s+/u', trim($currentText), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        if (count($words) > 6) {
+            return $currentText;
+        }
+
+        $prior = $chat->messages()
+            ->where('role', Message::ROLE_USER)
+            ->orderByDesc('id')
+            ->skip(1) // the current user message was just stored — skip it
+            ->take(2)
+            ->pluck('content')
+            ->reverse()
+            ->implode(' ');
+
+        $prior = trim($prior);
+
+        return $prior === '' ? $currentText : $prior . ' ' . $currentText;
+    }
+
     protected function retrieve(int $knowledgeBaseId, string $query): array
     {
         $queryVec = $this->gemini->embed($query, 'RETRIEVAL_QUERY');
