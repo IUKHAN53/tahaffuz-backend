@@ -491,7 +491,12 @@ class Gemini
             ]],
             'generationConfig' => [
                 'temperature' => 0.0,
-                'maxOutputTokens' => 2048,
+                // gemini-2.5-flash "thinks" by default, which silently consumes the
+                // whole output budget on a vision call and returns an EMPTY body —
+                // so every card was read as {} and rejected as "not a card". Disable
+                // thinking (budget 0) and give the JSON room.
+                'thinkingConfig' => ['thinkingBudget' => 0],
+                'maxOutputTokens' => 4096,
                 'responseMimeType' => 'application/json',
                 'responseSchema' => [
                     'type' => 'object',
