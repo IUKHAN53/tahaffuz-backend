@@ -11,6 +11,7 @@ use App\Models\ResponseScript;
 use App\Models\VaccinationCard;
 use App\Models\Worker;
 use App\Services\Gemini;
+use App\Services\MemoryService;
 use App\Services\Pinecone;
 use App\Services\SiteLocator;
 use App\Services\Whisper;
@@ -27,6 +28,7 @@ class ChatPipeline
         protected Gemini $gemini,
         protected VectorStore $store,
         protected SiteLocator $locator,
+        protected MemoryService $memory,
     ) {
         // Initialize Pinecone if configured
         if (config('rag.providers.vector_store') === 'pinecone' && config('services.pinecone.api_key')) {
@@ -149,7 +151,7 @@ class ChatPipeline
             $this->systemPrompt($effectiveLanguage),
             $history,
             $userText,
-            $context,
+            $this->withMemory($chat, $context),
             $this->replyInstruction($userText, $effectiveLanguage),
         );
 
@@ -157,6 +159,7 @@ class ChatPipeline
 
         if ($replyText !== '') {
             $this->storeAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn, $replyText, $citations);
+            $this->scheduleMemory($chat, $userText, $replyText);
         }
 
         $assistant = Message::create([
@@ -251,7 +254,7 @@ class ChatPipeline
         $full = '';
         $completed = false;
         try {
-            foreach ($this->gemini->generateStream($this->systemPrompt($effectiveLanguage), $history, $userText, $context, $this->replyInstruction($userText, $effectiveLanguage)) as $delta) {
+            foreach ($this->gemini->generateStream($this->systemPrompt($effectiveLanguage), $history, $userText, $this->withMemory($chat, $context), $this->replyInstruction($userText, $effectiveLanguage)) as $delta) {
                 $full .= $delta;
                 $onDelta($delta);
             }
@@ -269,6 +272,7 @@ class ChatPipeline
         // must never become the canonical cached reply.
         if ($completed && $full !== '') {
             $this->storeAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn, $full, $citations);
+            $this->scheduleMemory($chat, $userText, $full);
         }
 
         $assistant = Message::create([
@@ -484,6 +488,41 @@ class ChatPipeline
             ->take($max)
             ->values()
             ->all();
+    }
+
+    /**
+     * Prepend the memory block (what we already know about this worker/child)
+     * to the retrieval context, so the assistant uses remembered facts and the
+     * clarification flow stops re-asking for details it already knows.
+     */
+    protected function withMemory(Chat $chat, string $context): string
+    {
+        $block = $this->memory->contextBlock($chat->device_id);
+        if ($block === '') {
+            return $context;
+        }
+
+        return $context === '' ? $block : $block."\n\n".$context;
+    }
+
+    /**
+     * After the response is sent, extract durable facts from this turn into
+     * memory. Runs in a terminating callback so it adds no user-facing latency.
+     */
+    protected function scheduleMemory(Chat $chat, string $userText, string $replyText): void
+    {
+        if ($replyText === '' || ! $this->memory->enabled()) {
+            return;
+        }
+
+        $deviceId = $chat->device_id;
+        $workerId = Worker::where('device_id', $deviceId)->value('id');
+        $chatId = $chat->id;
+        $memory = $this->memory;
+
+        app()->terminating(function () use ($memory, $deviceId, $workerId, $chatId, $userText, $replyText) {
+            $memory->rememberFromTurn($deviceId, $workerId ? (int) $workerId : null, $chatId, $userText, $replyText);
+        });
     }
 
     /**
@@ -971,26 +1010,28 @@ class ChatPipeline
 
         // Prefer GPS (exact nearest). If we have no fix, fall back to the sites
         // in the worker's registered union council so the answer still works.
-        $siteContext = '';
+        $hits = [];
         if ($location && isset($location['lat'], $location['lng'])) {
-            $siteContext = $this->locator->nearestContext((float) $location['lat'], (float) $location['lng']);
+            $hits = $this->locator->nearest((float) $location['lat'], (float) $location['lng'], 3);
         }
-        if ($siteContext === '') {
+        if (empty($hits)) {
             $worker = Worker::where('device_id', $chat->device_id)->first();
             if ($worker && $worker->union_council) {
-                $siteContext = $this->locator->ucContext($worker->union_council);
+                $hits = $this->locator->ucHits($worker->union_council, 3);
             }
         }
-        if ($siteContext === '') {
+        if (empty($hits)) {
             return null;
         }
 
         // Tell the model to PRESENT these sites as the answer (with names and
         // areas), not ask the user for their location — these already are the
-        // user's local/nearest sites.
+        // user's local/nearest sites. The Google Maps pins are appended
+        // deterministically afterward, so the model must not invent links.
         $siteContext = "INSTRUCTION: The user is asking where to get vaccinated. Using ONLY the list "
             ."below, tell them their nearest/available vaccination site(s) with the site name and area. "
-            ."List 2-3 of them. Do NOT ask the user for their location.\n\n".$siteContext;
+            ."List 2-3 of them. Do NOT ask the user for their location, and do NOT write coordinates or "
+            ."links yourself.\n\n".$this->locator->contextFromHits($hits);
 
         $reply = $this->gemini->generate(
             $this->systemPrompt($language),
@@ -1003,6 +1044,13 @@ class ChatPipeline
         $text = $this->sanitizeAnswer($reply['text']);
         if ($text === '') {
             $text = $this->refusalText($language, $userText);
+        }
+
+        // Append the tappable Google Maps pins (one per site) — built directly
+        // from the site coordinates so the links are always correct.
+        $maps = $this->locator->mapsBlock($hits);
+        if ($maps !== '') {
+            $text .= "\n\n".$maps;
         }
 
         if ($onDelta) {

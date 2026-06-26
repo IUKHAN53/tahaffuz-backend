@@ -95,6 +95,80 @@ class SiteLocator
     }
 
     /**
+     * Vaccination sites in a union council, as nearest()-shaped hits (no
+     * distance), for the registered-worker fallback. Case/spacing-insensitive
+     * UC match, fixed sites first, only sites that have coordinates.
+     *
+     * @return array<int, array{site: Site}>
+     */
+    public function ucHits(string $unionCouncil, int $limit = 3): array
+    {
+        $norm = fn (string $s): string => preg_replace('/[\s\-]+/u', '', mb_strtolower(trim($s)));
+        $target = $norm($unionCouncil);
+
+        return Site::query()
+            ->whereNotNull('latitude')
+            ->whereNotNull('longitude')
+            ->get()
+            ->filter(fn (Site $s): bool => $norm((string) $s->union_council) === $target)
+            ->sortBy(fn (Site $s): int => $this->siteName($s) === $s->fix_site ? 0 : 1)
+            ->take($limit)
+            ->map(fn (Site $s): array => ['site' => $s])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * LLM-facing context describing a set of site hits (name, area, distance).
+     * No coordinates or links — those are appended deterministically afterward.
+     *
+     * @param  array<int, array{site: Site, distance_km?: float}>  $hits
+     */
+    public function contextFromHits(array $hits): string
+    {
+        $lines = [];
+        foreach ($hits as $h) {
+            $s = $h['site'];
+            $dist = isset($h['distance_km']) ? ' — '.round($h['distance_km'], 1).' km away' : '';
+            $lines[] = "- {$this->siteName($s)} (UC {$s->union_council}, {$s->district}){$dist}";
+        }
+
+        return "AVAILABLE VACCINATION SITES FOR THIS USER:\n".implode("\n", $lines);
+    }
+
+    /** Google Maps pin URL for a site, or null when it has no coordinates. */
+    public function mapsUrl(Site $s): ?string
+    {
+        if ($s->latitude === null || $s->longitude === null) {
+            return null;
+        }
+
+        return "https://www.google.com/maps/search/?api=1&query={$s->latitude},{$s->longitude}";
+    }
+
+    /**
+     * A markdown list of the sites with tappable Google Maps pins, appended to a
+     * site answer so the links are always correct (never LLM-generated/mangled).
+     *
+     * @param  array<int, array{site: Site, distance_km?: float}>  $hits
+     */
+    public function mapsBlock(array $hits): string
+    {
+        $lines = [];
+        foreach ($hits as $h) {
+            $s = $h['site'];
+            $url = $this->mapsUrl($s);
+            if ($url === null) {
+                continue;
+            }
+            $dist = isset($h['distance_km']) ? ' — '.round($h['distance_km'], 1).' km' : '';
+            $lines[] = "📍 [{$this->siteName($s)}]({$url}){$dist}";
+        }
+
+        return implode("\n", $lines);
+    }
+
+    /**
      * Human-readable site name. Appends the outreach-site label only when it's
      * a real one — "Fixed Site", blank, or junk seed values like "nan"/"null"
      * are dropped so answers don't read "RHC Manghopir — nan".

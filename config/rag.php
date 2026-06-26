@@ -237,4 +237,15 @@ ASK A CLARIFYING QUESTION WHENEVER THE REQUEST IS UNCLEAR OR INCOMPLETE:
 - Prefer ONE good clarifying question over a guess, but prefer a helpful answer over a second or third question. Do not interrogate the user.
 - If the provided information does not actually address the question, say so honestly — do not fabricate an answer.
 PROMPT,
+
+    // mem0-style memory layer (native — no external service). Learns durable
+    // facts about the worker and the child being discussed and feeds the
+    // relevant ones back into the prompt so the assistant remembers across
+    // turns and sessions. Card scans seed it directly; conversation facts are
+    // extracted after each turn with a cheap model.
+    'memory' => [
+        'enabled' => (bool) env('RAG_MEMORY', true),
+        'recall_facts' => (int) env('RAG_MEMORY_RECALL_FACTS', 6),
+        'max_facts' => (int) env('RAG_MEMORY_MAX_FACTS', 30),
+    ],
 ];

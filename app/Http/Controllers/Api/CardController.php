@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\VaccinationCard;
 use App\Models\Worker;
 use App\Services\Gemini;
+use App\Services\MemoryService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -14,7 +15,7 @@ use Throwable;
 
 class CardController extends Controller
 {
-    public function __construct(protected Gemini $gemini) {}
+    public function __construct(protected Gemini $gemini, protected MemoryService $memory) {}
 
     /**
      * POST /api/card/scan — read a photographed card with Gemini Vision and
@@ -112,6 +113,9 @@ class CardController extends Controller
             'vaccines' => $data['vaccines'] ?? [],
             'image_path' => $data['image_path'] ?? null,
         ]);
+
+        // Seed memory so the chat assistant "knows" this child from now on.
+        $this->memory->rememberCard($data['device_id'], $worker?->id, $card);
 
         return response()->json(['card' => $card]);
     }

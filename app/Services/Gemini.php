@@ -534,6 +534,59 @@ class Gemini
         return is_array($parsed) ? $parsed : [];
     }
 
+    /**
+     * Extract durable, third-person facts about the worker or the specific child
+     * from one chat exchange, for the memory layer. Returns a (possibly empty)
+     * list of short statements. Cheap (flash-lite, thinking off); best-effort.
+     *
+     * @return array<int, string>
+     */
+    public function extractMemories(string $userText, string $assistantText): array
+    {
+        $model = (string) config('rag.gemini.extract_model', 'gemini-2.5-flash-lite');
+        $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
+
+        $prompt = "From the exchange below, extract any DURABLE facts about the specific CHILD being "
+            ."discussed or about the health WORKER that would help answer their FUTURE questions — for "
+            ."example the child's age or date of birth, vaccines the child has already received, a named "
+            ."condition or reaction, or the worker's area, role, or a stated preference.\n\n"
+            ."RULES:\n"
+            ."- Only include facts the user EXPLICITLY stated. Do NOT infer, and do NOT include general "
+            ."medical knowledge or anything the assistant merely explained.\n"
+            ."- Write each as one short third-person statement, e.g. \"The child is 10 weeks old.\"\n"
+            ."- If there is nothing durable worth remembering, return an empty array.\n\n"
+            ."USER: {$userText}\nASSISTANT: {$assistantText}";
+
+        $resp = $this->postWithRetry($url, [
+            'contents' => [[
+                'role' => 'user',
+                'parts' => [['text' => $prompt]],
+            ]],
+            'generationConfig' => [
+                'temperature' => 0.0,
+                'thinkingConfig' => ['thinkingBudget' => 0],
+                'maxOutputTokens' => 512,
+                'responseMimeType' => 'application/json',
+                'responseSchema' => [
+                    'type' => 'array',
+                    'items' => ['type' => 'string'],
+                ],
+            ],
+        ], maxAttempts: 2, maxWaitMs: 6000);
+
+        $raw = $resp->json('candidates.0.content.parts.0.text', '[]');
+        $parsed = json_decode((string) $raw, true);
+
+        if (! is_array($parsed)) {
+            return [];
+        }
+
+        return array_values(array_filter(array_map(
+            fn ($x) => is_string($x) ? trim($x) : '',
+            $parsed,
+        )));
+    }
+
     public function generateFromAudio(string $systemPrompt, string $audioPath, string $audioMime, string $context): array
     {
         $bytes = @file_get_contents($audioPath);
