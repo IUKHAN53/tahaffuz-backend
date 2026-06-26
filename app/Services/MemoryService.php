@@ -26,6 +26,12 @@ class MemoryService
         return (bool) config('rag.memory.enabled', true);
     }
 
+    /** Whether this device has any stored memory (used to bypass the shared answer cache). */
+    public function has(string $deviceId): bool
+    {
+        return $this->enabled() && Memory::where('device_id', $deviceId)->exists();
+    }
+
     /**
      * A prompt block describing what is already known about this worker/child,
      * so the assistant uses it instead of re-asking. Empty string when nothing

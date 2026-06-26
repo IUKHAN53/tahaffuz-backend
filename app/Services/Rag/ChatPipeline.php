@@ -396,6 +396,12 @@ class ChatPipeline
             return null;
         }
 
+        // The shared answer cache is keyed by question only — bypass it when this
+        // device has memory, since the answer may depend on remembered facts.
+        if ($this->memory->has($chat->device_id)) {
+            return null;
+        }
+
         $cached = Cache::get($this->answerCacheKey($chat->knowledge_base_id, $userText, $language));
 
         return is_array($cached) && isset($cached['content']) ? $cached : null;
@@ -411,11 +417,25 @@ class ChatPipeline
             return;
         }
 
+        // Never cache a clarifying question (context-specific) or any reply for a
+        // device that has memory (the answer may be personalized).
+        if ($this->isClarifyingQuestion($content) || $this->memory->has($chat->device_id)) {
+            return;
+        }
+
         Cache::put(
             $this->answerCacheKey($chat->knowledge_base_id, $userText, $language),
             ['content' => $content, 'citations' => $citations],
             (int) config('rag.cache.answer_ttl', 21600),
         );
+    }
+
+    /** A short reply that is itself a question — i.e. a clarifying question, not an answer. */
+    protected function isClarifyingQuestion(string $content): bool
+    {
+        $t = trim($content);
+
+        return mb_strlen($t) <= 160 && (bool) preg_match('/[?؟]\s*$/u', $t);
     }
 
     /**
