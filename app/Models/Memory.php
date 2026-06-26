@@ -13,6 +13,7 @@ class Memory extends Model
     protected $fillable = [
         'device_id',
         'worker_id',
+        'chat_id',
         'kind',
         'content',
         'source_chat_id',

@@ -245,6 +245,12 @@ PROMPT,
     // extracted after each turn with a cheap model.
     'memory' => [
         'enabled' => (bool) env('RAG_MEMORY', true),
+        // Default scope for conversation memory. 'chat' = single-chat (each chat
+        // remembers only its own facts); 'device' = cross-chat (shared across all
+        // of a device's chats). The admin can override this in Settings; this is
+        // only the fallback default. Card-scanned child facts are always
+        // device-level ("current child") regardless of scope.
+        'scope' => env('RAG_MEMORY_SCOPE', 'chat'),
         'recall_facts' => (int) env('RAG_MEMORY_RECALL_FACTS', 6),
         'max_facts' => (int) env('RAG_MEMORY_MAX_FACTS', 30),
     ],

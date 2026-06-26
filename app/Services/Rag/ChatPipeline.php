@@ -398,7 +398,7 @@ class ChatPipeline
 
         // The shared answer cache is keyed by question only — bypass it when this
         // device has memory, since the answer may depend on remembered facts.
-        if ($this->memory->has($chat->device_id)) {
+        if ($this->memory->has($chat->device_id, $chat->id)) {
             return null;
         }
 
@@ -419,7 +419,7 @@ class ChatPipeline
 
         // Never cache a clarifying question (context-specific) or any reply for a
         // device that has memory (the answer may be personalized).
-        if ($this->isClarifyingQuestion($content) || $this->memory->has($chat->device_id)) {
+        if ($this->isClarifyingQuestion($content) || $this->memory->has($chat->device_id, $chat->id)) {
             return;
         }
 
@@ -517,7 +517,7 @@ class ChatPipeline
      */
     protected function withMemory(Chat $chat, string $context): string
     {
-        $block = $this->memory->contextBlock($chat->device_id);
+        $block = $this->memory->contextBlock($chat->device_id, $chat->id);
         if ($block === '') {
             return $context;
         }

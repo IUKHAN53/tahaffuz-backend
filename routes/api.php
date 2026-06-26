@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\BookmarkController;
 use App\Http\Controllers\Api\CardController;
 use App\Http\Controllers\Api\ChatController;
 use App\Http\Controllers\Api\FeedbackController;
+use App\Http\Controllers\Api\MemoryController;
 use App\Http\Controllers\Api\PushTokenController;
 use App\Http\Controllers\Api\QuickAnswersController;
 use App\Http\Controllers\Api\SearchController;
@@ -68,6 +69,12 @@ Route::prefix('search')->middleware('throttle:30,1')->group(function () {
 
 // Offline quick answers (cached Q&A pairs)
 Route::get('/quick-answers', [QuickAnswersController::class, 'index'])->middleware('throttle:10,1');
+
+// Assistant memory — what it remembers about this worker/child, and clearing it.
+Route::prefix('memories')->middleware('throttle:60,1')->group(function () {
+    Route::get('/', [MemoryController::class, 'index']);
+    Route::delete('/', [MemoryController::class, 'destroy']);
+});
 
 // Registration + area hierarchy (onboarding)
 Route::get('/areas', [AreaController::class, 'index'])->middleware('throttle:30,1');

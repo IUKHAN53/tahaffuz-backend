@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Memory;
+use App\Models\Setting;
 use App\Models\VaccinationCard;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -10,12 +11,16 @@ use Throwable;
 /**
  * Lightweight, mem0-style memory layer — entirely in Laravel, no external
  * service. It learns durable facts about the worker and the child they are
- * asking about, persists them per device, and feeds the relevant ones back
- * into the prompt so the assistant "remembers" across turns and sessions.
+ * asking about, persists them, and feeds the relevant ones back into the
+ * prompt so the assistant "remembers".
  *
- * Per-device memory sets are tiny (one current child + a handful of facts),
- * so recall is just "the current child's facts + the most recent facts" — no
- * embedding/vector search needed, which keeps it free and instant.
+ * Scope (admin-selectable, default 'chat'):
+ *  - 'chat'   : conversation facts are remembered only within the chat they
+ *               were said in (single-chat memory).
+ *  - 'device' : conversation facts are shared across all of a device's chats
+ *               (cross-chat memory).
+ * Card-scanned child facts are always device-level ("current child") so the
+ * scanner works regardless of which chat you open.
  */
 class MemoryService
 {
@@ -26,24 +31,31 @@ class MemoryService
         return (bool) config('rag.memory.enabled', true);
     }
 
-    /** Whether this device has any stored memory (used to bypass the shared answer cache). */
-    public function has(string $deviceId): bool
+    /** Effective memory scope: admin Setting wins, else the config default. */
+    public function scope(): string
     {
-        return $this->enabled() && Memory::where('device_id', $deviceId)->exists();
+        $scope = (string) Setting::get('memory_scope', config('rag.memory.scope', 'chat'));
+
+        return in_array($scope, ['chat', 'device'], true) ? $scope : 'chat';
+    }
+
+    /** Whether the recall set for this device+chat is non-empty (used to bypass the shared answer cache). */
+    public function has(string $deviceId, ?int $chatId): bool
+    {
+        return $this->enabled() && ! empty($this->recall($deviceId, $chatId));
     }
 
     /**
      * A prompt block describing what is already known about this worker/child,
-     * so the assistant uses it instead of re-asking. Empty string when nothing
-     * is known or memory is disabled.
+     * so the assistant uses it instead of re-asking. Empty when nothing is known.
      */
-    public function contextBlock(string $deviceId): string
+    public function contextBlock(string $deviceId, ?int $chatId): string
     {
         if (! $this->enabled()) {
             return '';
         }
 
-        $mems = $this->recall($deviceId);
+        $mems = $this->recall($deviceId, $chatId);
         if (empty($mems)) {
             return '';
         }
@@ -55,29 +67,52 @@ class MemoryService
     }
 
     /**
-     * The memories to surface for a turn: the current child's facts plus the
-     * most recent conversation facts, capped.
+     * The memories to surface for a turn: the current child's facts (always)
+     * plus the most recent conversation facts within the active scope.
      *
      * @return array<int, Memory>
      */
-    public function recall(string $deviceId): array
+    public function recall(string $deviceId, ?int $chatId): array
     {
         if (! $this->enabled()) {
             return [];
         }
 
+        // Card-scanned child facts are device-level ("current child").
         $childFacts = Memory::where('device_id', $deviceId)
             ->where('kind', Memory::KIND_CHILD)
             ->latest('id')
             ->get();
 
+        // Conversation facts honor the scope: in 'chat' scope only this chat's.
         $convoFacts = Memory::where('device_id', $deviceId)
             ->where('kind', Memory::KIND_FACT)
+            ->when($this->scope() === 'chat', fn ($q) => $q->where('chat_id', $chatId))
             ->latest('id')
             ->limit((int) config('rag.memory.recall_facts', 6))
             ->get();
 
         return $childFacts->concat($convoFacts)->all();
+    }
+
+    /** Memories for an admin/app listing, newest first (optionally one chat). */
+    public function list(string $deviceId, ?int $chatId = null): \Illuminate\Support\Collection
+    {
+        return Memory::where('device_id', $deviceId)
+            ->when($chatId !== null, fn ($q) => $q->where(fn ($q) => $q->where('chat_id', $chatId)->orWhereNull('chat_id')))
+            ->latest('id')
+            ->get();
+    }
+
+    /** Forget memories for a device (optionally just one chat's conversation facts). */
+    public function clear(string $deviceId, ?int $chatId = null): int
+    {
+        $q = Memory::where('device_id', $deviceId);
+        if ($chatId !== null) {
+            $q->where('chat_id', $chatId);
+        }
+
+        return $q->delete();
     }
 
     /**
@@ -122,8 +157,9 @@ class MemoryService
     }
 
     /**
-     * Extract durable facts from a completed turn and store them. Best-effort
-     * and side-effect free on failure — meant to run AFTER the response is sent.
+     * Extract durable facts from a completed turn and store them, tagged to the
+     * chat. Best-effort and side-effect free on failure — runs AFTER the
+     * response is sent.
      */
     public function rememberFromTurn(string $deviceId, ?int $workerId, ?int $chatId, string $userText, string $assistantText): void
     {
@@ -154,14 +190,17 @@ class MemoryService
             return;
         }
 
-        $existing = Memory::where('device_id', $deviceId)->get();
+        // Dedupe within the same scope bucket (same chat for facts, device-wide for child facts).
+        $existing = Memory::where('device_id', $deviceId)
+            ->when($kind === Memory::KIND_FACT && $chatId !== null, fn ($q) => $q->where('chat_id', $chatId))
+            ->get();
         foreach ($existing as $e) {
             similar_text(mb_strtolower($e->content), mb_strtolower($content), $pct);
             if ($pct >= 82.0) {
                 $e->forceFill([
                     'content' => $content,
                     'kind' => $kind,
-                    'source_chat_id' => $chatId,
+                    'chat_id' => $chatId,
                     'last_used_at' => now(),
                 ])->save();
 
@@ -172,6 +211,7 @@ class MemoryService
         Memory::create([
             'device_id' => $deviceId,
             'worker_id' => $workerId,
+            'chat_id' => $chatId,
             'kind' => $kind,
             'content' => $content,
             'source_chat_id' => $chatId,
