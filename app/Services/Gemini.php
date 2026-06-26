@@ -462,11 +462,14 @@ class Gemini
         $model = (string) (config('rag.gemini.vision_model') ?: $this->chatModel);
         $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
 
-        $prompt = 'FIRST, decide whether this image clearly shows a Pakistani EPI child immunization / '
-            .'vaccination card (the bilingual Urdu/English card with a coloured vaccine grid listing OPV, '
-            .'BCG, Penta, PCV, Rota, IPV, MR, etc.). Set "is_card" to true ONLY if it clearly is such a card. '
-            .'If it is anything else — a person, a different document, a screenshot, a random photo — set '
-            .'"is_card" to false and leave every other field empty.'."\n\n"
+        $prompt = 'FIRST, decide whether this image could be a Pakistani EPI child immunization / '
+            .'vaccination card — the bilingual Urdu/English card, usually with a coloured vaccine grid '
+            .'listing OPV, BCG, Penta, PCV, Rota, IPV, MR, etc., and a child/guardian info page. Set '
+            .'"is_card" to true if it looks like such a card EVEN IF the photo is angled, blurry, partially '
+            .'cropped, faded, or the handwriting is hard to read, and even if only one page is visible. '
+            .'Only set "is_card" to false if the image is clearly something else entirely — a selfie or '
+            .'person, a landscape, a screenshot, or an unrelated document with no vaccine grid or EPI '
+            .'card layout. When in doubt, set it to true.'."\n\n"
             .'If it IS a card, extract its details into JSON. The right page has the child/guardian info and '
             .'card number; the left grid lists vaccines (OPV-0, Hep B, BCG, OPV-1, Rota-1, PCV-1, Penta-1, '
             .'OPV-2, Rota-2, PCV-2, Penta-2, OPV-3, IPV-1, PCV-3, Penta-3, IPV-2, Typhoid, MR-1, MR-2), each '

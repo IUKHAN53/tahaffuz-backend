@@ -42,8 +42,22 @@ class CardController extends Controller
         }
 
         // Restrict the scanner to actual vaccination cards: if the image isn't
-        // one, drop it and tell the app — nothing is read or stored.
-        if (empty($extracted['is_card'])) {
+        // one, drop it and tell the app — nothing is read or stored. We accept
+        // when Gemini flags it as a card OR when it actually pulled card-shaped
+        // fields out of it (child name, card number, or a dated vaccine row),
+        // since the boolean alone is over-conservative on angled/blurry photos.
+        $vaccines = is_array($extracted['vaccines'] ?? null) ? $extracted['vaccines'] : [];
+        $hasVaccineRow = (bool) array_filter(
+            $vaccines,
+            fn ($v) => is_array($v) && (! empty($v['name']) || ! empty($v['given_date']) || ! empty($v['due_date'])),
+        );
+        $looksLikeCard = ! empty($extracted['is_card'])
+            || ! empty($extracted['child_name'])
+            || ! empty($extracted['card_number'])
+            || ! empty($extracted['date_of_birth'])
+            || $hasVaccineRow;
+
+        if (! $looksLikeCard) {
             Storage::disk('local')->delete($path);
 
             return response()->json(['error' => 'not_a_card'], 422);

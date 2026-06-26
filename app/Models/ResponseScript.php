@@ -29,9 +29,12 @@ class ResponseScript extends Model
     public function getContent(string $language): string
     {
         $field = "content_{$language}";
+        $value = $this->{$field} ?? null;
 
-        // Return language-specific content if available, otherwise fall back to Urdu
-        return $this->{$field} ?? $this->content_ur;
+        // Return language-specific content if present, otherwise fall back to
+        // Urdu. A blank per-language field (empty string from the admin form)
+        // counts as "not provided" — `??` alone would wrongly return the blank.
+        return ($value !== null && trim($value) !== '') ? $value : (string) $this->content_ur;
     }
 
     /**

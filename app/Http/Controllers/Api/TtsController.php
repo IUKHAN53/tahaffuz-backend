@@ -315,11 +315,18 @@ class TtsController extends Controller
         if (preg_match('/[ڳڻڪھڀٺٽ۾]/u', $text)) {
             return 'sd';
         }
+
+        // Arabic-script text is Urdu/Farsi/Pashto/Sindhi — never English. A
+        // contradicting hint (e.g. the app UI is set to English while the answer
+        // came back in Urdu) must NOT override the script, or an English voice
+        // ends up reading Urdu letters as gibberish. Honor only a same-script hint.
+        if (preg_match('/\p{Arabic}/u', $text)) {
+            return in_array($hint, ['ur', 'fa', 'ps', 'sd'], true) ? $hint : 'ur';
+        }
+
+        // Latin script: honor a valid hint, otherwise English.
         if (in_array($hint, ['en', 'ur', 'fa', 'ps', 'sd'], true)) {
             return $hint;
-        }
-        if (preg_match('/\p{Arabic}/u', $text)) {
-            return 'ur';
         }
 
         return 'en';
