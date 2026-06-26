@@ -1028,9 +1028,9 @@ class ChatPipeline
 
         // Identity questions — a prefix match is safe ("who are you exactly?").
         $identityPatterns = [
-            '/^(who are you|what are you|introduce yourself|tell me about yourself|what is tahaffuz|what is this)\b/i',
-            '/^(تم کون ہو|آپ کون ہیں|تعارف|اپنا تعارف|تحفظ کیا ہے)/u',
-            '/^(tum kaun ho|aap kaun hain|taaruf|apna taaruf|tahaffuz kya hai)\b/i',
+            '/^(who are you|what are you|introduce yourself|tell me about yourself|what is tahaffuz|what is tika dost|what is this)\b/i',
+            '/^(تم کون ہو|آپ کون ہیں|تعارف|اپنا تعارف|تحفظ کیا ہے|ٹیکہ دوست کیا ہے)/u',
+            '/^(tum kaun ho|aap kaun hain|taaruf|apna taaruf|tahaffuz kya hai|tika dost kya hai)\b/i',
             '/^(ته څوک یې|تاسو څوک یاست|ځان معرفي کړئ)/u',
             '/^(توهان ڪير آهيو|پاڻ جو تعارف)/u',
         ];
@@ -1086,11 +1086,11 @@ class ChatPipeline
     protected function defaultIntroduction(string $language): string
     {
         return match ($language) {
-            'en'  => "Hello! I am Tahaffuz, your EPI training assistant. I can answer questions about vaccines, the cold chain, and immunization schedules. How can I help you today?",
-            'fa'  => 'سلام! من «تحفظ» هستم، دستیار آموزشی EPI شما. می‌توانم به پرسش‌های شما درباره واکسن، زنجیره سرد و برنامه واکسیناسیون پاسخ دهم. امروز چطور می‌توانم کمکتان کنم؟',
-            'ps'  => 'سلام! زه "تحفظ" یم، ستاسو د EPI روزنې مرستندویه. زه د واکسینونو، کولډ چین، او د واکسینیشن مهالویش په اړه پوښتنو ته ځواب ورکولی شم. نن څنګه مرسته وکړم؟',
-            'sd'  => 'السلام عليڪم! مان "تحفظ" آهيان، توهان جو EPI ٽريننگ اسسٽنٽ. مان ويڪسين، ڪولڊ چين، ۽ واڪسينيشن شيڊول بابت سوالن جا جواب ڏئي سگهان ٿو. اڄ ڪيئن مدد ڪريان؟',
-            default => 'السلام علیکم! میں "تحفظ" ہوں — آپ کا EPI ٹریننگ معاون۔ میں ویکسین، کولڈ چین، اور حفاظتی ٹیکوں کے شیڈول کے بارے میں سوالات کا جواب دے سکتا ہوں۔ آج میں آپ کی کیسے مدد کروں؟',
+            'en'  => "Hello! I am Tika Dost, your EPI training assistant. I can answer questions about vaccines, the cold chain, and immunization schedules. How can I help you today?",
+            'fa'  => 'سلام! من «ٹیکہ دوست» هستم، دستیار آموزشی EPI شما. می‌توانم به پرسش‌های شما درباره واکسن، زنجیره سرد و برنامه واکسیناسیون پاسخ دهم. امروز چطور می‌توانم کمکتان کنم؟',
+            'ps'  => 'سلام! زه "ٹیکہ دوست" یم، ستاسو د EPI روزنې مرستندویه. زه د واکسینونو، کولډ چین، او د واکسینیشن مهالویش په اړه پوښتنو ته ځواب ورکولی شم. نن څنګه مرسته وکړم؟',
+            'sd'  => 'السلام عليڪم! مان "ٹیکہ دوست" آهيان، توهان جو EPI ٽريننگ اسسٽنٽ. مان ويڪسين، ڪولڊ چين، ۽ واڪسينيشن شيڊول بابت سوالن جا جواب ڏئي سگهان ٿو. اڄ ڪيئن مدد ڪريان؟',
+            default => 'السلام علیکم! میں "ٹیکہ دوست" ہوں — آپ کا EPI ٹریننگ معاون۔ میں ویکسین، کولڈ چین، اور حفاظتی ٹیکوں کے شیڈول کے بارے میں سوالات کا جواب دے سکتا ہوں۔ آج میں آپ کی کیسے مدد کروں؟',
         };
     }
 

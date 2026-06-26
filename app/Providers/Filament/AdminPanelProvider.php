@@ -30,7 +30,7 @@ class AdminPanelProvider extends PanelProvider
             ->id('admin')
             ->path('admin')
             ->login()
-            ->brandName('Tahaffuz')
+            ->brandName('Tika Dost')
             ->brandLogo(fn () => new HtmlString($this->brandLogoSvg()))
             ->brandLogoHeight('2.5rem')
             ->favicon(asset('favicon.svg'))
@@ -78,7 +78,7 @@ class AdminPanelProvider extends PanelProvider
     protected function brandLogoSvg(): string
     {
         return <<<'SVG'
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 200" preserveAspectRatio="xMinYMid meet" aria-label="Tahaffuz" role="img" style="height:100%;width:auto;display:block">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 200" preserveAspectRatio="xMinYMid meet" aria-label="Tika Dost" role="img" style="height:100%;width:auto;display:block">
   <defs>
     <style>@import url('https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@600&amp;display=swap');</style>
     <linearGradient id="tahaffuz-shield" x1="0" y1="0" x2="0" y2="1">
@@ -91,9 +91,9 @@ class AdminPanelProvider extends PanelProvider
     <circle cx="76" cy="142" r="5" fill="#E0A24A"/>
     <circle cx="100" cy="142" r="5" fill="#E0A24A" opacity="0.7"/>
     <circle cx="124" cy="142" r="5" fill="#E0A24A" opacity="0.45"/>
-    <text x="100" y="108" text-anchor="middle" fill="#F4EEE3" font-family="'Noto Nastaliq Urdu', serif" font-weight="600" font-size="54" direction="rtl">تحفظ</text>
+    <text x="100" y="108" text-anchor="middle" fill="#F4EEE3" font-family="'Noto Nastaliq Urdu', serif" font-weight="600" font-size="54" direction="rtl">ٹیکہ دوست</text>
   </g>
-  <text x="210" y="112" fill="currentColor" font-family="Manrope, system-ui, sans-serif" font-weight="800" font-size="72" letter-spacing="-1">Tahaffuz</text>
+  <text x="210" y="112" fill="currentColor" font-family="Manrope, system-ui, sans-serif" font-weight="800" font-size="72" letter-spacing="-1">Tika Dost</text>
   <text x="212" y="142" fill="currentColor" opacity="0.55" font-family="'JetBrains Mono', monospace" font-weight="500" font-size="14" letter-spacing="3.4">HEALTH · AI</text>
 </svg>
 SVG;

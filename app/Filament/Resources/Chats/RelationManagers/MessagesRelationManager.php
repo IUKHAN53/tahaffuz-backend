@@ -39,7 +39,7 @@ class MessagesRelationManager extends RelationManager
                     ])
                     ->formatStateUsing(fn (string $state) => match ($state) {
                         'user' => '👤 User',
-                        'assistant' => '🤖 Tahaffuz',
+                        'assistant' => '🤖 Tika Dost',
                         default => $state,
                     }),
                 TextColumn::make('content')
