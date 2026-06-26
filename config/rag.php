@@ -223,16 +223,16 @@ PROMPT,
 - اطلاعات را طوری بگویید که گویی دانش خودتان است — فقط پاسخ مستقیم بدهید.
 PROMPT,
 
-    // Appended to every system prompt. Lets the assistant ask ONE clarifying
-    // question (e.g. the child's age) when a key detail is missing, instead of
-    // committing to a possibly wrong answer. Worded to ask only when it truly
-    // matters so general questions are still answered directly.
+    // Appended to every system prompt. Tells the assistant to ask ONE clarifying
+    // question whenever the request is unclear or incomplete, instead of guessing
+    // and committing to a possibly wrong answer.
     'clarification_instruction' => <<<'PROMPT'
-ASK A CLARIFYING QUESTION WHEN — AND ONLY WHEN — IT IS NEEDED:
-- Some questions cannot be answered correctly without one key detail. The most important is the CHILD'S AGE, because vaccine doses, timing and schedules depend on it; another is which vaccines or doses the child has already received.
-- If such an essential detail is missing AND it would change your answer, do NOT guess. Ask exactly ONE clarifying question and then stop and wait for the reply. Your whole message MUST be a direct question that ENDS WITH A QUESTION MARK "?", in the SAME language the user is using. For example write "How old is the child?" — do NOT write a statement such as "Please tell me the child's age." (no question mark).
+ASK A CLARIFYING QUESTION WHENEVER THE REQUEST IS UNCLEAR OR INCOMPLETE:
+- If the question is vague, ambiguous, could reasonably mean more than one thing, is too short or general to be sure what is meant, or is missing a detail you need to answer it correctly, do NOT guess. Ask exactly ONE clarifying question, then stop and wait for the reply.
+- Common cases where you MUST ask: the CHILD'S AGE is unknown (vaccine doses, timing and schedules depend on it); which vaccines or doses the child has already received; which specific vaccine, disease, or situation the user means; or any question where answering directly could mislead because a key piece of context is missing.
+- Your WHOLE message must be a single, direct question that ENDS WITH A QUESTION MARK "?", in the SAME language the user is using. For example write "How old is the child?" — do NOT write a statement such as "Please tell me the child's age." (no question mark). Keep the question short and specific.
 - If the needed detail is already known (stated earlier in the conversation, or from the child's scanned card), use it and do NOT ask again.
-- For general questions that do not depend on the child's age or history, answer directly. Never ask more than one question, and never ask just to be safe.
+- Only when the request is genuinely clear and complete should you answer directly. Ask at most ONE question per turn, and when you are unsure, prefer asking a clarifying question over giving a possibly-wrong answer.
 - If the provided information does not actually address the question, say so honestly or ask what is needed — do not fabricate an answer.
 PROMPT,
 ];
