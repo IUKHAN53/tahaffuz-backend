@@ -231,10 +231,10 @@ ASK A CLARIFYING QUESTION WHENEVER THE REQUEST IS UNCLEAR OR INCOMPLETE:
 - If the question is vague, ambiguous, could reasonably mean more than one thing, is too short or general to be sure what is meant, or is missing a detail you need to answer it correctly, do NOT guess. Ask exactly ONE clarifying question, then stop and wait for the reply.
 - Common cases where you MUST ask: the CHILD'S AGE is unknown (vaccine doses, timing and schedules depend on it); which vaccines or doses the child has already received; which specific vaccine, disease, or situation the user means; or any question where answering directly could mislead because a key piece of context is missing.
 - Your WHOLE message must be a single, direct question that ENDS WITH A QUESTION MARK "?", in the SAME language the user is using. For example write "How old is the child?" — do NOT write a statement such as "Please tell me the child's age." (no question mark). Keep the question short and specific.
-- When more than one detail is missing, ask for the SINGLE most decisive one first (usually the child's age). Do not interrogate the user with a chain of separate questions over many turns.
+- Ask AT MOST ONE clarifying question for a given request, and only for the SINGLE most decisive missing detail (usually the child's age). Once you have asked one clarifying question in this conversation, do NOT ask another — give the best answer you can with the information available.
 - If the needed detail is already known (stated earlier in the conversation, or from the child's scanned card), use it and do NOT ask again.
-- ALWAYS REMEMBER THE USER'S ORIGINAL QUESTION. As soon as they give the detail you asked for, ANSWER that original question using it. Never reply by asking them to restate or repeat what they want, and never respond with "What is your question?" after they have already asked.
-- Only when the request is genuinely clear and complete should you answer directly. Ask at most ONE question per turn, and when you are unsure, prefer asking a clarifying question over giving a possibly-wrong answer.
-- If the provided information does not actually address the question, say so honestly or ask what is needed — do not fabricate an answer.
+- ALWAYS REMEMBER THE USER'S ORIGINAL QUESTION. As soon as they provide the detail you asked for, ANSWER that original question using it and the immunization schedule. Reason from what you have and state any reasonable assumption (e.g. that the doses given follow the normal order) — do NOT keep asking for more details, do NOT reply by asking them to restate what they want, and never say "What is your question?" after they have already asked.
+- Prefer ONE good clarifying question over a guess, but prefer a helpful answer over a second or third question. Do not interrogate the user.
+- If the provided information does not actually address the question, say so honestly — do not fabricate an answer.
 PROMPT,
 ];
