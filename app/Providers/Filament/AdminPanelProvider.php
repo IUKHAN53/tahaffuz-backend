@@ -78,23 +78,19 @@ class AdminPanelProvider extends PanelProvider
     protected function brandLogoSvg(): string
     {
         return <<<'SVG'
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 200" preserveAspectRatio="xMinYMid meet" aria-label="Tika Dost" role="img" style="height:100%;width:auto;display:block">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 200" preserveAspectRatio="xMinYMid meet" aria-label="Tika Dost" role="img" style="height:100%;width:auto;display:block">
   <defs>
     <style>@import url('https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@600&amp;display=swap');</style>
-    <linearGradient id="tahaffuz-shield" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#143C6C"/>
-      <stop offset="1" stop-color="#07203F"/>
-    </linearGradient>
   </defs>
-  <g>
-    <path d="M100 20 L168 42 V100 C168 134 142 156 110 170 L96 184 L92 168 C68 162 32 142 32 100 V42 Z" fill="url(#tahaffuz-shield)"/>
-    <circle cx="76" cy="142" r="5" fill="#E0A24A"/>
-    <circle cx="100" cy="142" r="5" fill="#E0A24A" opacity="0.7"/>
-    <circle cx="124" cy="142" r="5" fill="#E0A24A" opacity="0.45"/>
-    <text x="100" y="108" text-anchor="middle" fill="#F4EEE3" font-family="'Noto Nastaliq Urdu', serif" font-weight="600" font-size="54" direction="rtl">ٹیکہ دوست</text>
+  <!-- Chat Shield mark (indigo for the light admin chrome) -->
+  <g transform="translate(14,30) scale(1.4)">
+    <path d="M50 9 L82 20 C84 20.8 85 22 85 24 L85 50 C85 70 71 83 56 89 L60 99 L43 88 C27 84 15 70 15 50 L15 24 C15 22 16 20.8 18 20 Z" fill="#143C6C"/>
+    <circle cx="35" cy="50" r="6.5" fill="#E0A24A"/>
+    <circle cx="50" cy="50" r="6.5" fill="#E0A24A"/>
+    <circle cx="65" cy="50" r="6.5" fill="#E0A24A"/>
   </g>
-  <text x="210" y="112" fill="currentColor" font-family="Manrope, system-ui, sans-serif" font-weight="800" font-size="72" letter-spacing="-1">Tika Dost</text>
-  <text x="212" y="142" fill="currentColor" opacity="0.55" font-family="'JetBrains Mono', monospace" font-weight="500" font-size="14" letter-spacing="3.4">HEALTH · AI</text>
+  <text x="188" y="96" fill="currentColor" font-family="Manrope, system-ui, sans-serif" font-weight="800" font-size="60" letter-spacing="-1">Tika Dost</text>
+  <text x="190" y="150" fill="currentColor" font-family="'Noto Nastaliq Urdu', serif" font-weight="600" font-size="40" direction="rtl">ٹیکہ دوست</text>
 </svg>
 SVG;
     }
