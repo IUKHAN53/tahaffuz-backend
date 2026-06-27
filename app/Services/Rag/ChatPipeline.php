@@ -4,6 +4,7 @@ namespace App\Services\Rag;
 
 use App\Models\Chat;
 use App\Models\Chunk;
+use App\Models\CuratedAnswer;
 use App\Models\Document;
 use App\Models\KnowledgeBase;
 use App\Models\Message;
@@ -124,6 +125,21 @@ class ChatPipeline
         // "What's pending for this child?" — answer from the scanned card.
         if ($cardAnswer = $this->maybeCardAnswer($chat, $userText, $effectiveLanguage, $started)) {
             return $cardAnswer;
+        }
+
+        // Admin-curated answer (feedback loop) — fixed answers win over RAG.
+        if ($curated = CuratedAnswer::match($userText, $effectiveLanguage)) {
+            $assistant = Message::create([
+                'chat_id' => $chat->id,
+                'role' => Message::ROLE_ASSISTANT,
+                'content' => $curated,
+                'citations' => [],
+                'meta' => ['source' => 'curated', 'language' => $effectiveLanguage],
+                'latency_ms' => (int) ((microtime(true) - $started) * 1000),
+            ]);
+            $chat->touch();
+
+            return ['message' => $assistant, 'citations' => []];
         }
 
         // Serve a cached answer for repeated first-turn questions (suggestion
