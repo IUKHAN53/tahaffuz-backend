@@ -37,38 +37,45 @@ class ResponseScript extends Model
         return ($value !== null && trim($value) !== '') ? $value : (string) $this->content_ur;
     }
 
-    /**
-     * Get a script by key with caching.
-     */
+    /** Direct lookup (uncached) — kept for callers that need the model. */
     public static function getByKey(string $key): ?self
     {
-        return Cache::remember("response_script:{$key}", 300, function () use ($key) {
-            return static::where('key', $key)->where('is_active', true)->first();
-        });
+        return static::where('key', $key)->where('is_active', true)->first();
     }
 
     /**
-     * Get content for a key in the specified language.
-     * Returns null if script doesn't exist.
+     * Get content for a key in the specified language, falling back to Urdu.
+     * Caches a plain ARRAY (never Eloquent models — those deserialize as
+     * __PHP_Incomplete_Class from the database cache and crash under load).
      */
     public static function getContentFor(string $key, string $language): ?string
     {
-        $script = static::getByKey($key);
+        $all = Cache::remember('response_scripts:active', 300, function () {
+            return static::where('is_active', true)->get()
+                ->keyBy('key')
+                ->map(fn (self $s) => [
+                    'content_ur' => $s->content_ur,
+                    'content_en' => $s->content_en,
+                    'content_rud' => $s->content_rud,
+                    'content_ps' => $s->content_ps,
+                    'content_sd' => $s->content_sd,
+                ])
+                ->toArray();
+        });
 
-        return $script?->getContent($language);
+        $row = $all[$key] ?? null;
+        if (! $row) {
+            return null;
+        }
+        $val = $row["content_{$language}"] ?? null;
+
+        return ($val !== null && trim((string) $val) !== '') ? $val : (($row['content_ur'] ?? '') ?: null);
     }
 
-    /**
-     * Clear the cache when a script is updated.
-     */
     protected static function booted(): void
     {
-        static::saved(function (self $script) {
-            Cache::forget("response_script:{$script->key}");
-        });
-
-        static::deleted(function (self $script) {
-            Cache::forget("response_script:{$script->key}");
-        });
+        $flush = fn () => Cache::forget('response_scripts:active');
+        static::saved($flush);
+        static::deleted($flush);
     }
 }

@@ -29,8 +29,13 @@ class CuratedAnswer extends Model
      */
     public static function match(string $userText, ?string $language): ?string
     {
-        $active = Cache::remember('curated_answers:active', 300, fn () => static::where('is_active', true)->get());
-        if ($active->isEmpty()) {
+        // Cache plain arrays — never Eloquent models/collections (they come back
+        // as __PHP_Incomplete_Class from the database cache and crash under load).
+        $active = Cache::remember('curated_answers:active', 300, fn () => static::where('is_active', true)
+            ->get(['question', 'answer', 'language'])
+            ->map(fn (self $r) => ['question' => $r->question, 'answer' => $r->answer, 'language' => $r->language])
+            ->all());
+        if (empty($active)) {
             return null;
         }
 
@@ -43,20 +48,20 @@ class CuratedAnswer extends Model
         $best = null;
         $bestScore = 0.0;
         foreach ($active as $row) {
-            if ($row->language && $language && $row->language !== $language) {
+            if (! empty($row['language']) && $language && $row['language'] !== $language) {
                 continue;
             }
-            $q = $norm($row->question);
+            $q = $norm((string) $row['question']);
             if ($q === '') {
                 continue;
             }
             if (str_contains($u, $q) || str_contains($q, $u)) {
-                return $row->answer;
+                return $row['answer'];
             }
             similar_text($u, $q, $pct);
             if ($pct > $bestScore) {
                 $bestScore = $pct;
-                $best = $row->answer;
+                $best = $row['answer'];
             }
         }
 
