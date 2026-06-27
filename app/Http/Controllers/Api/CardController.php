@@ -7,6 +7,7 @@ use App\Models\VaccinationCard;
 use App\Models\Worker;
 use App\Services\Gemini;
 use App\Services\MemoryService;
+use App\Services\VaccineSchedule;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -15,7 +16,67 @@ use Throwable;
 
 class CardController extends Controller
 {
-    public function __construct(protected Gemini $gemini, protected MemoryService $memory) {}
+    public function __construct(
+        protected Gemini $gemini,
+        protected MemoryService $memory,
+        protected VaccineSchedule $schedule,
+    ) {}
+
+    /** GET /api/card/schedule?device_id= — the current child's full computed schedule. */
+    public function schedule(Request $request): JsonResponse
+    {
+        $deviceId = (string) $request->query('device_id');
+        if (mb_strlen($deviceId) < 8) {
+            abort(400, 'device_id required');
+        }
+        $card = VaccinationCard::where('device_id', $deviceId)->latest()->first();
+        if (! $card) {
+            return response()->json(['card' => null, 'schedule' => [], 'summary' => null]);
+        }
+        $dob = $this->schedule->parseDob($card->date_of_birth);
+        $given = $this->schedule->givenFromCard($card->vaccines);
+
+        return response()->json([
+            'child' => $card->child_name,
+            'date_of_birth' => $card->date_of_birth,
+            'has_dob' => $dob !== null,
+            'schedule' => $this->schedule->build($dob, $given),
+            'summary' => $this->schedule->summary($dob, $given),
+        ]);
+    }
+
+    /** GET /api/defaulters?device_id= — scanned children who have overdue vaccines. */
+    public function defaulters(Request $request): JsonResponse
+    {
+        $deviceId = (string) $request->query('device_id');
+        if (mb_strlen($deviceId) < 8) {
+            abort(400, 'device_id required');
+        }
+
+        $seen = [];
+        $out = [];
+        foreach (VaccinationCard::where('device_id', $deviceId)->latest()->get() as $c) {
+            $key = mb_strtolower(trim((string) $c->child_name)).'|'.$c->date_of_birth;
+            if (isset($seen[$key])) {
+                continue; // keep only the latest card per child
+            }
+            $seen[$key] = true;
+
+            $dob = $this->schedule->parseDob($c->date_of_birth);
+            $sum = $this->schedule->summary($dob, $this->schedule->givenFromCard($c->vaccines));
+            if (! empty($sum['overdue'])) {
+                $out[] = [
+                    'card_id' => $c->id,
+                    'child' => $c->child_name ?: 'Unknown child',
+                    'date_of_birth' => $c->date_of_birth,
+                    'overdue' => $sum['overdue'],
+                    'next' => $sum['next'],
+                ];
+            }
+        }
+
+        return response()->json(['defaulters' => $out]);
+    }
 
     /**
      * POST /api/card/scan — read a photographed card with Gemini Vision and

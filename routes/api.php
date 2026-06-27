@@ -88,6 +88,9 @@ Route::get('/sites/nearest', [SiteController::class, 'nearest'])->middleware('th
 Route::post('/card/scan', [CardController::class, 'scan'])->middleware('throttle:20,1');
 Route::post('/card', [CardController::class, 'store'])->middleware('throttle:30,1');
 Route::get('/card', [CardController::class, 'show'])->middleware('throttle:60,1');
+// Computed immunization schedule for the current child, and overdue children.
+Route::get('/card/schedule', [CardController::class, 'schedule'])->middleware('throttle:60,1');
+Route::get('/defaulters', [CardController::class, 'defaulters'])->middleware('throttle:60,1');
 
 // Push notification endpoints
 Route::prefix('push')->middleware('throttle:30,1')->group(function () {

@@ -14,6 +14,7 @@ use App\Services\Gemini;
 use App\Services\MemoryService;
 use App\Services\Pinecone;
 use App\Services\SiteLocator;
+use App\Services\VaccineSchedule;
 use App\Services\Whisper;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Str;
@@ -29,6 +30,7 @@ class ChatPipeline
         protected VectorStore $store,
         protected SiteLocator $locator,
         protected MemoryService $memory,
+        protected VaccineSchedule $schedule,
     ) {
         // Initialize Pinecone if configured
         if (config('rag.providers.vector_store') === 'pinecone' && config('services.pinecone.api_key')) {
@@ -989,11 +991,21 @@ class ChatPipeline
         if ($card->next_due_date) {
             $lines[] = 'Next due date on card: '.$card->next_due_date;
         }
+
+        // Authoritative, computed schedule status — exact dates, no guessing.
+        $dob = $this->schedule->parseDob($card->date_of_birth);
+        $sum = $this->schedule->summary($dob, $this->schedule->givenFromCard($card->vaccines));
         $lines[] = '';
-        $lines[] = 'INSTRUCTION: Using the standard Pakistan EPI schedule (OPV-0/HepB/BCG at birth; '
-            .'OPV/Rota/PCV/Penta-1 at 6 weeks; -2 at 10 weeks; OPV-3/IPV-1/PCV-3/Penta-3 at 14 weeks; '
-            .'IPV-2/Typhoid/MR-1 at 9 months; MR-2 at 15 months) and the card above, tell the worker which '
-            .'vaccines this child has had, which are still pending, and what to give next. Be concise.';
+        if (! $sum['has_dob']) {
+            $lines[] = 'COMPUTED STATUS: date of birth is unreadable, so exact due dates can\'t be computed — ask the worker for the child\'s age.';
+        } else {
+            $lines[] = 'COMPUTED STATUS (authoritative — use these exact facts and dates, do NOT recompute):';
+            $lines[] = '- Overdue now: '.($sum['overdue'] ? implode('; ', $sum['overdue']) : 'none');
+            $lines[] = '- Next due: '.($sum['next'] ? $sum['next']['code'].' on '.$sum['next']['due_date'] : 'schedule complete');
+        }
+        $lines[] = '';
+        $lines[] = 'INSTRUCTION: Tell the worker, concisely, which vaccines are overdue and what to give next, '
+            .'using the COMPUTED STATUS above verbatim for the antigens and dates. Do not invent other dates.';
 
         return implode("\n", $lines);
     }
