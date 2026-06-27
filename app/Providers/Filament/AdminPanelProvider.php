@@ -77,20 +77,18 @@ class AdminPanelProvider extends PanelProvider
      */
     protected function brandLogoSvg(): string
     {
+        // Single-line lockup sized for the short sidebar. The shield uses
+        // currentColor so it stays legible on both the light and dark admin
+        // themes; the dots stay amber.
         return <<<'SVG'
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 200" preserveAspectRatio="xMinYMid meet" aria-label="Tika Dost" role="img" style="height:100%;width:auto;display:block">
-  <defs>
-    <style>@import url('https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@600&amp;display=swap');</style>
-  </defs>
-  <!-- Chat Shield mark (indigo for the light admin chrome) -->
-  <g transform="translate(14,30) scale(1.4)">
-    <path d="M50 9 L82 20 C84 20.8 85 22 85 24 L85 50 C85 70 71 83 56 89 L60 99 L43 88 C27 84 15 70 15 50 L15 24 C15 22 16 20.8 18 20 Z" fill="#143C6C"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 104" preserveAspectRatio="xMinYMid meet" aria-label="Tika Dost" role="img" style="height:100%;width:auto;display:block">
+  <g transform="translate(2,2) scale(1.0)">
+    <path d="M50 9 L82 20 C84 20.8 85 22 85 24 L85 50 C85 70 71 83 56 89 L60 99 L43 88 C27 84 15 70 15 50 L15 24 C15 22 16 20.8 18 20 Z" fill="currentColor"/>
     <circle cx="35" cy="50" r="6.5" fill="#E0A24A"/>
     <circle cx="50" cy="50" r="6.5" fill="#E0A24A"/>
     <circle cx="65" cy="50" r="6.5" fill="#E0A24A"/>
   </g>
-  <text x="188" y="96" fill="currentColor" font-family="Manrope, system-ui, sans-serif" font-weight="800" font-size="60" letter-spacing="-1">Tika Dost</text>
-  <text x="190" y="150" fill="currentColor" font-family="'Noto Nastaliq Urdu', serif" font-weight="600" font-size="40" direction="rtl">ٹیکہ دوست</text>
+  <text x="104" y="66" fill="currentColor" font-family="Manrope, system-ui, sans-serif" font-weight="800" font-size="52" letter-spacing="-1">Tika Dost</text>
 </svg>
 SVG;
     }
