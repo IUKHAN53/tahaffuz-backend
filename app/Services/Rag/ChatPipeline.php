@@ -1161,15 +1161,18 @@ class ChatPipeline
             $hits = array_values(array_filter($near, fn ($h) => ($h['distance_km'] ?? INF) <= $maxKm));
         }
         if (empty($hits)) {
-            $area = $this->gemini->extractMentionedArea($userText, $this->locator->knownAreas());
-            if ($area) {
-                $hits = $this->locator->sitesInArea($area, 3);
-            }
-        }
-        if (empty($hits)) {
             $worker = Worker::where('device_id', $chat->device_id)->first();
             if ($worker && $worker->union_council) {
                 $hits = $this->locator->ucHits($worker->union_council, 3);
+            }
+        }
+        // Last resort (unregistered + no usable GPS): did they NAME an area? This
+        // is the only branch needing an LLM call, so it runs last — registered or
+        // GPS users never pay for it.
+        if (empty($hits)) {
+            $area = $this->gemini->extractMentionedArea($userText, $this->locator->knownAreas());
+            if ($area) {
+                $hits = $this->locator->sitesInArea($area, 3);
             }
         }
         if (empty($hits)) {
@@ -1181,32 +1184,11 @@ class ChatPipeline
             $onStatus('locating');
         }
 
-        // Tell the model to PRESENT these sites as the answer (with names and
-        // areas), not ask the user for their location — these already are the
-        // user's local/nearest sites. The Google Maps pins are appended
-        // deterministically afterward, so the model must not invent links.
-        $siteContext = "INSTRUCTION: The user wants to know where to get vaccinated. The list below "
-            ."ARE their available vaccination sites — present them directly and confidently as places "
-            ."they can go, giving each site's name and area. List 2-3. Do NOT apologize, do NOT say "
-            ."there are no sites nearby, do NOT ask for their location, do NOT mention any place that is "
-            ."not in the list, and do NOT write coordinates or links yourself.\n\n"
-            .$this->locator->contextFromHits($hits);
-
-        $reply = $this->gemini->generate(
-            $this->systemPrompt($language),
-            $this->history($chat, exclude: 1),
-            $userText,
-            $siteContext,
-            $this->replyInstruction($userText, $language),
-        );
-
-        $text = $this->sanitizeAnswer($reply['text']);
-        if ($text === '') {
-            $text = $this->refusalText($language, $userText);
-        }
-
-        // Append the tappable Google Maps pins (one per site) — built directly
-        // from the site coordinates so the links are always correct.
+        // Build the answer deterministically from the data — no LLM call (this is
+        // the bulk of the latency, and removes any apology/contradiction risk).
+        // The localised site list comes from SiteLocator; the tappable Google
+        // Maps pins are appended from the coordinates so links are always correct.
+        $text = $this->locator->answerText($hits, $language);
         $maps = $this->locator->mapsBlock($hits);
         if ($maps !== '') {
             $text .= "\n\n".$maps;

@@ -188,6 +188,35 @@ class SiteLocator
         return "AVAILABLE VACCINATION SITES FOR THIS USER:\n".implode("\n", $lines);
     }
 
+    /**
+     * The user-facing site answer, built deterministically from the data — no
+     * LLM call. The intro line is localised; site names/areas come straight from
+     * the records so they stay consistent with the Google Maps pins (appended
+     * separately by mapsBlock). Instant, and it can never apologize.
+     *
+     * @param  array<int, array{site: Site, distance_km?: float}>  $hits
+     */
+    public function answerText(array $hits, string $language): string
+    {
+        $intro = match ($language) {
+            'ur' => 'آپ درج ذیل مراکز پر ٹیکا لگوا سکتے ہیں:',
+            'fa' => 'می‌توانید در مراکز زیر واکسن بزنید:',
+            'ps' => 'تاسو کولی شئ په لاندې مرکزونو کې واکسین ولګوئ:',
+            'sd' => 'توهان هيٺين هنڌن تي ويڪسين لڳائي سگهو ٿا:',
+            default => 'You can get vaccinated at the following sites:',
+        };
+
+        $lines = [];
+        foreach ($hits as $h) {
+            $s = $h['site'];
+            $area = trim((string) $s->union_council);
+            $dist = isset($h['distance_km']) ? ' — '.round($h['distance_km'], 1).' km' : '';
+            $lines[] = '• '.$this->siteName($s).($area !== '' ? " ({$area})" : '').$dist;
+        }
+
+        return $intro."\n".implode("\n", $lines);
+    }
+
     /** Google Maps pin URL for a site, or null when it has no coordinates. */
     public function mapsUrl(Site $s): ?string
     {
