@@ -601,7 +601,9 @@ class Gemini
             return false;
         }
 
-        $model = (string) config('rag.gemini.extract_model', 'gemini-2.5-flash-lite');
+        // The chat model (flash) — flash-lite is too weak for this nuanced
+        // Urdu intent call (it swings between over-eager and over-conservative).
+        $model = (string) (config('rag.gemini.classify_model') ?: $this->chatModel);
         $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
 
         $prompt = "You route messages for a Pakistani vaccination assistant (Urdu/English/Pashto/Sindhi). "
