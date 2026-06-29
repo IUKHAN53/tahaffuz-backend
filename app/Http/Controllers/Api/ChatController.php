@@ -152,6 +152,7 @@ class ChatController extends Controller
                     $language,
                     fn (string $delta) => $send('delta', ['text' => $delta]),
                     $location,
+                    fn (string $key) => $send('status', ['key' => $key]),
                 );
 
                 $send('done', [

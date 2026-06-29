@@ -201,9 +201,12 @@ class ChatPipeline
      * @param  callable(string):void  $onDelta
      * @return array{message: Message, citations: array}
      */
-    public function answerTextStreamed(Chat $chat, string $userText, ?string $language, callable $onDelta, ?array $location = null): array
+    public function answerTextStreamed(Chat $chat, string $userText, ?string $language, callable $onDelta, ?array $location = null, ?callable $onStatus = null): array
     {
         $started = microtime(true);
+
+        // Live "what I'm doing" status for the chat UI. No-op when not provided.
+        $onStatus = $onStatus ?? static fn (string $key) => null;
 
         // The selected language drives the reply (auto-detect only as fallback).
         $effectiveLanguage = $this->effectiveLanguage($userText, $language);
@@ -234,13 +237,16 @@ class ChatPipeline
             return ['message' => $assistant, 'citations' => []];
         }
 
+        // Generic "working on it" status; the site/card branches refine it below.
+        $onStatus('searching');
+
         // "Where is my nearest site?" — answer from live site data + GPS.
-        if ($siteAnswer = $this->maybeSiteAnswer($chat, $userText, $effectiveLanguage, $location, $started, $onDelta)) {
+        if ($siteAnswer = $this->maybeSiteAnswer($chat, $userText, $effectiveLanguage, $location, $started, $onDelta, $onStatus)) {
             return $siteAnswer;
         }
 
         // "What's pending for this child?" — answer from the scanned card.
-        if ($cardAnswer = $this->maybeCardAnswer($chat, $userText, $effectiveLanguage, $started, $onDelta)) {
+        if ($cardAnswer = $this->maybeCardAnswer($chat, $userText, $effectiveLanguage, $started, $onDelta, $onStatus)) {
             return $cardAnswer;
         }
 
@@ -950,7 +956,7 @@ class ChatPipeline
      *
      * @return array{message: Message, citations: array}|null
      */
-    protected function maybeCardAnswer(Chat $chat, string $userText, string $language, float $started, ?callable $onDelta = null): ?array
+    protected function maybeCardAnswer(Chat $chat, string $userText, string $language, float $started, ?callable $onDelta = null, ?callable $onStatus = null): ?array
     {
         if (! $this->isCardQuery($userText)) {
             return null;
@@ -959,6 +965,10 @@ class ChatPipeline
         $card = VaccinationCard::where('device_id', $chat->device_id)->latest()->first();
         if (! $card) {
             return null;
+        }
+
+        if ($onStatus) {
+            $onStatus('reading_card');
         }
 
         $context = $this->cardContext($card);
@@ -1106,7 +1116,7 @@ class ChatPipeline
      * @param  array{lat: float, lng: float}|null  $location
      * @return array{message: Message, citations: array}|null
      */
-    protected function maybeSiteAnswer(Chat $chat, string $userText, string $language, ?array $location, float $started, ?callable $onDelta = null): ?array
+    protected function maybeSiteAnswer(Chat $chat, string $userText, string $language, ?array $location, float $started, ?callable $onDelta = null, ?callable $onStatus = null): ?array
     {
         if (! $this->isLocationQuery($userText)) {
             return null;
@@ -1126,6 +1136,11 @@ class ChatPipeline
         }
         if (empty($hits)) {
             return null;
+        }
+
+        // We're committed to a site answer now — refine the UI status.
+        if ($onStatus) {
+            $onStatus('locating');
         }
 
         // Tell the model to PRESENT these sites as the answer (with names and
