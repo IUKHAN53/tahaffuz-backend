@@ -604,14 +604,24 @@ class Gemini
         $model = (string) config('rag.gemini.extract_model', 'gemini-2.5-flash-lite');
         $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
 
-        $prompt = "You route messages for a Pakistani vaccination assistant. Decide if the user is "
-            ."asking to be DIRECTED TO A PLACE where they or a child can GO to GET vaccinated — a "
-            ."vaccination centre, site, clinic, the nearest/closest location, or 'where can I get the "
-            ."vaccine'. This is TRUE even if they only state their area (\"I live in X, where can I get "
-            ."vaccinated?\") or ask to \"share the location\".\n"
-            ."Set FALSE for everything else: vaccine schedules or timing, doses, side effects, fever, "
-            ."WHERE ON THE BODY a vaccine is injected, cold chain, eligibility, or general information.\n\n"
-            ."Message (any language): {$userText}";
+        $prompt = "You route messages for a Pakistani vaccination assistant (Urdu/English/Pashto/Sindhi). "
+            ."Answer ONLY with JSON {\"wants_site_location\": true|false}.\n\n"
+            ."TRUE = the user wants to be told a PHYSICAL PLACE / centre / site / clinic they can GO to in "
+            ."order to get a vaccination — e.g. 'where can I get vaccinated', 'I live in X, where can I get "
+            ."the vaccine', 'share the nearest location', 'which place in my area gives the shot'.\n"
+            ."FALSE = anything else, ESPECIALLY where ON THE BODY / in the body a vaccine is injected "
+            ."(arm, thigh, 'جسم میں کہاں'), the schedule/timing/age, doses, side effects/fever, cold "
+            ."chain, eligibility, or general knowledge.\n\n"
+            ."Examples:\n"
+            ."'میں چشتی نگر میں رہتا ہوں کہاں سے ٹیکا لگوا سکتا ہوں' => true\n"
+            ."'قریب ترین ویکسینیشن سینٹر کہاں ہے' => true\n"
+            ."'لوکیشن شیئر کریں جہاں سے ٹیکا لگ سکے' => true\n"
+            ."'ہمارے علاقے میں ٹیکا کہاں سے لگوائیں' => true\n"
+            ."'ٹیکہ جسم میں کہاں لگایا جاتا ہے' => false\n"
+            ."'ٹیکہ بازو میں لگتا ہے یا ران میں' => false\n"
+            ."'خسرہ کا ٹیکہ کب لگتا ہے' => false\n"
+            ."'ٹیکا لگنے کے بعد بخار کیوں ہوتا ہے' => false\n\n"
+            ."Message: {$userText}";
 
         try {
             $resp = $this->postWithRetry($url, [
