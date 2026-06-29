@@ -190,6 +190,8 @@ class ChatController extends Controller
             'knowledge_base_id' => ['nullable', 'integer'],
             'audio' => ['required', 'file', 'mimes:m4a,mp3,mp4,wav,ogg,webm,3gp,aac', 'max:10240'],
             'language' => ['nullable', 'string', 'in:en,ur,fa,ps,sd'],
+            'latitude' => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude' => ['nullable', 'numeric', 'between:-180,180'],
         ]);
 
         $chat = $this->pipeline->findOrCreateChat(
@@ -202,7 +204,7 @@ class ChatController extends Controller
         $mime = $file->getMimeType() ?: 'audio/m4a';
 
         try {
-            $result = $this->pipeline->answerAudio($chat, $file->getRealPath(), $mime, $data['language'] ?? null);
+            $result = $this->pipeline->answerAudio($chat, $file->getRealPath(), $mime, $data['language'] ?? null, $this->locationFrom($data));
         } catch (Throwable $e) {
             return $this->serviceError($e, $data['language'] ?? null, $chat->id);
         }

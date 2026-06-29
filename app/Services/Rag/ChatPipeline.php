@@ -318,7 +318,7 @@ class ChatPipeline
      *
      * @return array{message: Message, citations: array, transcript: string}
      */
-    public function answerAudio(Chat $chat, string $audioPath, string $audioMime, ?string $language = null): array
+    public function answerAudio(Chat $chat, string $audioPath, string $audioMime, ?string $language = null, ?array $location = null): array
     {
         $started = microtime(true);
 
@@ -359,6 +359,30 @@ class ChatPipeline
                 'content' => $introResponse,
                 'citations' => [],
                 'meta' => ['script' => 'introduction', 'language' => $effectiveLanguage, 'source' => 'voice'],
+                'latency_ms' => (int) ((microtime(true) - $started) * 1000),
+            ]);
+            $chat->touch();
+            return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript];
+        }
+
+        // Spoken "where can I get vaccinated?" — answer from live site data + GPS.
+        if ($siteAnswer = $this->maybeSiteAnswer($chat, $transcript, $effectiveLanguage, $location, $started)) {
+            return $siteAnswer + ['transcript' => $transcript];
+        }
+
+        // Spoken "what's pending for this child?" — answer from the scanned card.
+        if ($cardAnswer = $this->maybeCardAnswer($chat, $transcript, $effectiveLanguage, $started)) {
+            return $cardAnswer + ['transcript' => $transcript];
+        }
+
+        // Admin-curated answer (feedback loop) wins over RAG.
+        if ($curated = CuratedAnswer::match($transcript, $effectiveLanguage)) {
+            $assistant = Message::create([
+                'chat_id' => $chat->id,
+                'role' => Message::ROLE_ASSISTANT,
+                'content' => $curated,
+                'citations' => [],
+                'meta' => ['source' => 'curated', 'language' => $effectiveLanguage, 'voice' => true],
                 'latency_ms' => (int) ((microtime(true) - $started) * 1000),
             ]);
             $chat->touch();
