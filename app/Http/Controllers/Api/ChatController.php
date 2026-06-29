@@ -134,12 +134,18 @@ class ChatController extends Controller
         $location = $this->locationFrom($data);
 
         return response()->stream(function () use ($chat, $message, $language, $location) {
+            // PHP-FPM defaults output_buffering=4096, which holds the small SSE
+            // events until the script ends — so the client gets meta/status/delta
+            // all at once at the very end and live status/streaming is impossible.
+            // End every output buffer here so each event flushes immediately.
+            @ini_set('zlib.output_compression', '0');
+            while (ob_get_level() > 0) {
+                ob_end_flush();
+            }
+
             $send = function (string $event, array $payload): void {
                 echo "event: {$event}\n";
                 echo 'data: '.json_encode($payload, JSON_UNESCAPED_UNICODE)."\n\n";
-                if (ob_get_level() > 0) {
-                    @ob_flush();
-                }
                 flush();
             };
 
