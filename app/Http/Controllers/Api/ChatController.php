@@ -149,6 +149,13 @@ class ChatController extends Controller
                 flush();
             };
 
+            // Prime the connection with a large SSE comment (clients ignore lines
+            // starting with ':'). Apache/proxy output buffers are a few KB and
+            // otherwise hold the whole response until the script ends; over-filling
+            // them once here forces an early flush so events then stream live.
+            echo ':'.str_repeat(' ', 16384)."\n\n";
+            flush();
+
             $send('meta', ['chat_id' => $chat->id]);
 
             try {
