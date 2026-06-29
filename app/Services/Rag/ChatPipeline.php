@@ -1032,13 +1032,33 @@ class ChatPipeline
      */
     protected function isLocationQuery(string $text): bool
     {
-        // Site/centre/nearest keywords — deliberately NOT bare "where", which
-        // matches knowledge-base questions ("where is polio given?").
-        if (preg_match('/\b(site|sites|fix\s?site|fixsite|outreach|cent(er|re)|clinic|nearest|near\s?(me|by)|vaccination\s+(point|place|location))\b/iu', $text)) {
+        // English: discrete site / centre / nearest / location words. Deliberately
+        // NOT bare "where", which matches knowledge-base questions ("where is
+        // polio given?").
+        if (preg_match('/\b(site|sites|fix\s?site|fixsite|outreach|cent(er|re)|clinic|nearest|near\s?(me|by)|location|vaccination\s+(point|place|location))\b/iu', $text)) {
             return true;
         }
 
-        return (bool) preg_match('/(سائٹ|سینٹر|سنٹر|مرکز|ویکسینیشن مرکز|نزدیک|قریب|نزدیکی|کیمپ|کلینک|نږدې|واکسین مرکز|نزدیک‌ترین|نزدیک ترین|مرکز نزدیک)/u', $text);
+        // English: "where can I get / find vaccinated". No trailing \b — "vaccin"
+        // is a prefix of "vaccinated".
+        if (preg_match('/where\b.{0,30}\b(get|receive|find|go|take)\b.{0,25}(vaccinat|immuniz|jab|shot|polio|vaccine)/i', $text)) {
+            return true;
+        }
+
+        // Urdu/Roman/Pashto/Sindhi/Farsi: explicit site / centre / location words.
+        if (preg_match('/(لوکیشن|سائٹ|سینٹر|سنٹر|مرکز|ویکسینیشن مرکز|نزدیک|قریب|نزدیکی|قریبی|کیمپ|کلینک|نږدې|واکسین مرکز|نزدیک‌ترین|نزدیک ترین|مرکز نزدیک|ڪلينڪ|ويجهو|درمانگاه)/u', $text)
+            || preg_match('/\b(location|markaz|clinic|camp)\b/i', $text)) {
+            return true;
+        }
+
+        // "(from) where / which place can I GET vaccinated" — a where-to-go cue
+        // PLUS a vaccine word. The "سے / from" and "جا / go / لگوا / get" cues keep
+        // this to real location asks, not body-injection-site questions
+        // ("ٹیکہ کہاں لگتا ہے" = where on the body is it given).
+        $whereGo = preg_match('/(کہاں سے|کدھر سے|جہاں سے|کس جگہ سے|جگہ.{0,18}(جہاں|سے|کہاں)|کہاں.{0,12}(جا|لگوا|ملے|لگوں)|لگوا.{0,12}کہاں|کجا|چیرته|چېرته|ڪٿي|ڪٿان|kahan se|kidhar se|jagah)/u', $text);
+        $vaccinate = preg_match('/(ٹیکا|ٹیکہ|ویکسین|پولیو|واکسین|ویکسینیشن|tika|teeka|vaccin|polio|immuni)/iu', $text);
+
+        return (bool) ($whereGo && $vaccinate);
     }
 
     /**
