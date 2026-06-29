@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Site;
+use Illuminate\Support\Facades\Cache;
 
 class SiteLocator
 {
@@ -111,6 +112,57 @@ class SiteLocator
             ->whereNotNull('longitude')
             ->get()
             ->filter(fn (Site $s): bool => $norm((string) $s->union_council) === $target)
+            ->sortBy(fn (Site $s): int => $this->siteName($s) === $s->fix_site ? 0 : 1)
+            ->take($limit)
+            ->map(fn (Site $s): array => ['site' => $s])
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Distinct area names (union councils, towns, districts) that have at least
+     * one geolocated site — the candidate list handed to the LLM area matcher.
+     * Cached for an hour; the site table changes rarely.
+     *
+     * @return array<int, string>
+     */
+    public function knownAreas(): array
+    {
+        return Cache::remember('site_known_areas', 3600, function (): array {
+            return Site::query()
+                ->whereNotNull('latitude')
+                ->get(['union_council', 'town', 'district'])
+                ->flatMap(fn (Site $s): array => [$s->union_council, $s->town, $s->district])
+                ->map(fn ($a): string => trim((string) $a))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+        });
+    }
+
+    /**
+     * Sites in a named area — matched against union council, town OR district
+     * (case/spacing-insensitive). Used when the user NAMES a place but we have
+     * no GPS fix, e.g. "I live in Chishti Nagar". Fixed sites first.
+     *
+     * @return array<int, array{site: Site}>
+     */
+    public function sitesInArea(string $area, int $limit = 3): array
+    {
+        $norm = fn (string $s): string => preg_replace('/[\s\-]+/u', '', mb_strtolower(trim($s)));
+        $target = $norm($area);
+        if ($target === '') {
+            return [];
+        }
+
+        return Site::query()
+            ->whereNotNull('latitude')
+            ->whereNotNull('longitude')
+            ->get()
+            ->filter(fn (Site $s): bool => $norm((string) $s->union_council) === $target
+                || $norm((string) $s->town) === $target
+                || $norm((string) $s->district) === $target)
             ->sortBy(fn (Site $s): int => $this->siteName($s) === $s->fix_site ? 0 : 1)
             ->take($limit)
             ->map(fn (Site $s): array => ['site' => $s])

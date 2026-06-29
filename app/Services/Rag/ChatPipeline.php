@@ -1148,11 +1148,19 @@ class ChatPipeline
             return null;
         }
 
-        // Prefer GPS (exact nearest). If we have no fix, fall back to the sites
-        // in the worker's registered union council so the answer still works.
+        // Prefer GPS (exact nearest). With no fix, try the area the user NAMED
+        // ("I live in Chishti Nagar") via the LLM matcher, then fall back to the
+        // worker's registered union council — so the answer still works without
+        // GPS or even registration.
         $hits = [];
         if ($location && isset($location['lat'], $location['lng'])) {
             $hits = $this->locator->nearest((float) $location['lat'], (float) $location['lng'], 3);
+        }
+        if (empty($hits)) {
+            $area = $this->gemini->extractMentionedArea($userText, $this->locator->knownAreas());
+            if ($area) {
+                $hits = $this->locator->sitesInArea($area, 3);
+            }
         }
         if (empty($hits)) {
             $worker = Worker::where('device_id', $chat->device_id)->first();

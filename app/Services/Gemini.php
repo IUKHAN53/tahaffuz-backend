@@ -651,6 +651,60 @@ class Gemini
         }
     }
 
+    /**
+     * When the user NAMES an area/place (any language or script), match it to one
+     * of the known site areas — e.g. Urdu "چشتی نگر" -> "Chishti Nagar-7". Returns
+     * the matched area string (guaranteed to be one of $areas) or null. Lets a
+     * user find sites without GPS or registration. Best-effort, null on error.
+     *
+     * @param  array<int, string>  $areas
+     */
+    public function extractMentionedArea(string $userText, array $areas): ?string
+    {
+        $userText = trim($userText);
+        if ($userText === '' || empty($areas)) {
+            return null;
+        }
+
+        $model = (string) (config('rag.gemini.classify_model') ?: $this->chatModel);
+        $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
+
+        $list = implode("\n", array_map(fn ($a) => "- {$a}", $areas));
+        $prompt = "A user is asking where to get vaccinated and may NAME an area/place — in any "
+            ."language or script (e.g. Urdu 'چشتی نگر' = 'Chishti Nagar-7', 'گجرو' = a 'Gujro Zone'). "
+            ."From the KNOWN AREAS list below, return the SINGLE entry the user is referring to, "
+            ."matching across scripts and spellings; if they name a broader area pick the closest "
+            ."listed match. If they do NOT name any place, or it is not in the list, return an empty "
+            ."string. Return EXACTLY one of the listed strings, verbatim.\n\n"
+            ."KNOWN AREAS:\n{$list}\n\nUSER MESSAGE: {$userText}";
+
+        try {
+            $resp = $this->postWithRetry($url, [
+                'contents' => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
+                'generationConfig' => [
+                    'temperature' => 0.0,
+                    'thinkingConfig' => ['thinkingBudget' => 0],
+                    'maxOutputTokens' => 64,
+                    'responseMimeType' => 'application/json',
+                    'responseSchema' => [
+                        'type' => 'object',
+                        'properties' => ['area' => ['type' => 'string']],
+                        'required' => ['area'],
+                    ],
+                ],
+            ], maxAttempts: 2, maxWaitMs: 4000);
+
+            $raw = $resp->json('candidates.0.content.parts.0.text', '{}');
+            $parsed = json_decode((string) $raw, true);
+            $area = is_array($parsed) ? trim((string) ($parsed['area'] ?? '')) : '';
+
+            // Only accept an exact known area (guard against hallucinated names).
+            return ($area !== '' && in_array($area, $areas, true)) ? $area : null;
+        } catch (Throwable $e) {
+            return null;
+        }
+    }
+
     public function generateFromAudio(string $systemPrompt, string $audioPath, string $audioMime, string $context): array
     {
         $bytes = @file_get_contents($audioPath);
