@@ -1088,7 +1088,10 @@ class ChatPipeline
         // PLUS a vaccine word. The "سے / from" and "جا / go / لگوا / get" cues keep
         // this to real location asks, not body-injection-site questions
         // ("ٹیکہ کہاں لگتا ہے" = where on the body is it given).
-        $whereGo = preg_match('/(کہاں سے|کدھر سے|جہاں سے|کس جگہ سے|جگہ.{0,18}(جہاں|سے|کہاں)|کہاں.{0,12}(جا|لگوا|ملے|لگوں)|لگوا.{0,12}کہاں|کجا|چیرته|چېرته|ڪٿي|ڪٿان|kahan se|kidhar se|jagah)/u', $text);
+        // Note: "جا" must be the go-verb (جاؤں/جانا/جائیں…), NOT the passive
+        // auxiliary "جاتا/جاتی/جاتے" ("is being done"), or body-site questions
+        // like "کہاں لگایا جاتا ہے" would false-match.
+        $whereGo = preg_match('/(کہاں سے|کدھر سے|جہاں سے|کس جگہ سے|جگہ.{0,18}(جہاں|سے|کہاں)|کہاں.{0,12}(جاؤں|جانا|جائ|جاؤ|جا\s*سک|لگوا|ملے|لگوں)|لگوا.{0,12}کہاں|کجا|چیرته|چېرته|ڪٿي|ڪٿان|kahan se|kidhar se|jagah)/u', $text);
         $vaccinate = preg_match('/(ٹیکا|ٹیکہ|ویکسین|پولیو|واکسین|ویکسینیشن|tika|teeka|vaccin|polio|immuni)/iu', $text);
 
         return (bool) ($whereGo && $vaccinate);
