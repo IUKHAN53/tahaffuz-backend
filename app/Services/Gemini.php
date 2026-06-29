@@ -587,6 +587,58 @@ class Gemini
         )));
     }
 
+    /**
+     * Decide whether the user wants to be DIRECTED TO A PLACE where they (or a
+     * child) can GO to get vaccinated — a centre/site/clinic/nearest location —
+     * as opposed to any other question. Used to route to the live site locator
+     * instead of relying on brittle keyword matching. Cheap (flash-lite, thinking
+     * off, tiny output); best-effort and defaults to false on any error.
+     */
+    public function classifyLocationRequest(string $userText): bool
+    {
+        $userText = trim($userText);
+        if ($userText === '') {
+            return false;
+        }
+
+        $model = (string) config('rag.gemini.extract_model', 'gemini-2.5-flash-lite');
+        $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
+
+        $prompt = "You route messages for a Pakistani vaccination assistant. Decide if the user is "
+            ."asking to be DIRECTED TO A PLACE where they or a child can GO to GET vaccinated — a "
+            ."vaccination centre, site, clinic, the nearest/closest location, or 'where can I get the "
+            ."vaccine'. This is TRUE even if they only state their area (\"I live in X, where can I get "
+            ."vaccinated?\") or ask to \"share the location\".\n"
+            ."Set FALSE for everything else: vaccine schedules or timing, doses, side effects, fever, "
+            ."WHERE ON THE BODY a vaccine is injected, cold chain, eligibility, or general information.\n\n"
+            ."Message (any language): {$userText}";
+
+        try {
+            $resp = $this->postWithRetry($url, [
+                'contents' => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
+                'generationConfig' => [
+                    'temperature' => 0.0,
+                    'thinkingConfig' => ['thinkingBudget' => 0],
+                    'maxOutputTokens' => 16,
+                    'responseMimeType' => 'application/json',
+                    'responseSchema' => [
+                        'type' => 'object',
+                        'properties' => ['wants_site_location' => ['type' => 'boolean']],
+                        'required' => ['wants_site_location'],
+                    ],
+                ],
+            ], maxAttempts: 2, maxWaitMs: 4000);
+
+            $raw = $resp->json('candidates.0.content.parts.0.text', '{}');
+            $parsed = json_decode((string) $raw, true);
+
+            return (bool) ($parsed['wants_site_location'] ?? false);
+        } catch (Throwable $e) {
+            // Best-effort — the keyword fast-path already covers the common asks.
+            return false;
+        }
+    }
+
     public function generateFromAudio(string $systemPrompt, string $audioPath, string $audioMime, string $context): array
     {
         $bytes = @file_get_contents($audioPath);

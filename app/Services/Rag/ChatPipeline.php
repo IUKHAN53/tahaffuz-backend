@@ -1030,7 +1030,40 @@ class ChatPipeline
      * Does the question look like it's asking about vaccination sites/locations?
      * Covers en/ur/fa/ps/sd keywords.
      */
+    /**
+     * Is the user asking to be directed to a place to get vaccinated? The clear,
+     * unambiguous phrasings are matched instantly by keyword. Anything that only
+     * HINTS at a place/where/going-to-get-vaccinated is handed to the model,
+     * which understands intent far better than a regex — without paying for an
+     * LLM call on the many messages that have no location flavour at all.
+     */
     protected function isLocationQuery(string $text): bool
+    {
+        if ($this->matchesLocationKeywords($text)) {
+            return true;
+        }
+
+        if ($this->hasLocationHint($text)) {
+            return $this->gemini->classifyLocationRequest($text);
+        }
+
+        return false;
+    }
+
+    /**
+     * Broad, high-recall gate: does the message mention a place / where / going
+     * to get vaccinated, in any supported language? Only these get the LLM
+     * intent check; everything else is definitely not a location request.
+     */
+    protected function hasLocationHint(string $text): bool
+    {
+        return (bool) (
+            preg_match('/\b(where|place|location|site|cent(er|re)|clinic|hospital|near|nearest|address|markaz)\b/i', $text)
+            || preg_match('/(کہاں|کدھر|کجا|جگہ|مقام|لوکیشن|جائے|جاؤں|جانا|قریب|نزدیک|مرکز|سینٹر|کلینک|ہسپتال|سائٹ|کیمپ|لگوا|لگوانا|چیرته|چېرته|ځای|ڪٿي|نږدې|درمانگاه)/u', $text)
+        );
+    }
+
+    protected function matchesLocationKeywords(string $text): bool
     {
         // English: discrete site / centre / nearest / location words. Deliberately
         // NOT bare "where", which matches knowledge-base questions ("where is
