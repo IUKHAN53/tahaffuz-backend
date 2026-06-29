@@ -1154,7 +1154,11 @@ class ChatPipeline
         // GPS or even registration.
         $hits = [];
         if ($location && isset($location['lat'], $location['lng'])) {
-            $hits = $this->locator->nearest((float) $location['lat'], (float) $location['lng'], 3);
+            $near = $this->locator->nearest((float) $location['lat'], (float) $location['lng'], 3);
+            // Drop implausibly far GPS results (wrong city / bad site coordinate) so
+            // a named area or the registered UC is used instead of ~1000 km sites.
+            $maxKm = (float) config('rag.site_max_distance_km', 100);
+            $hits = array_values(array_filter($near, fn ($h) => ($h['distance_km'] ?? INF) <= $maxKm));
         }
         if (empty($hits)) {
             $area = $this->gemini->extractMentionedArea($userText, $this->locator->knownAreas());
@@ -1181,10 +1185,12 @@ class ChatPipeline
         // areas), not ask the user for their location — these already are the
         // user's local/nearest sites. The Google Maps pins are appended
         // deterministically afterward, so the model must not invent links.
-        $siteContext = "INSTRUCTION: The user is asking where to get vaccinated. Using ONLY the list "
-            ."below, tell them their nearest/available vaccination site(s) with the site name and area. "
-            ."List 2-3 of them. Do NOT ask the user for their location, and do NOT write coordinates or "
-            ."links yourself.\n\n".$this->locator->contextFromHits($hits);
+        $siteContext = "INSTRUCTION: The user wants to know where to get vaccinated. The list below "
+            ."ARE their available vaccination sites — present them directly and confidently as places "
+            ."they can go, giving each site's name and area. List 2-3. Do NOT apologize, do NOT say "
+            ."there are no sites nearby, do NOT ask for their location, do NOT mention any place that is "
+            ."not in the list, and do NOT write coordinates or links yourself.\n\n"
+            .$this->locator->contextFromHits($hits);
 
         $reply = $this->gemini->generate(
             $this->systemPrompt($language),
