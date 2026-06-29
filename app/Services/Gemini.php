@@ -631,7 +631,7 @@ class Gemini
                 'generationConfig' => [
                     'temperature' => 0.0,
                     'thinkingConfig' => ['thinkingBudget' => 0],
-                    'maxOutputTokens' => 16,
+                    'maxOutputTokens' => 64,
                     'responseMimeType' => 'application/json',
                     'responseSchema' => [
                         'type' => 'object',
