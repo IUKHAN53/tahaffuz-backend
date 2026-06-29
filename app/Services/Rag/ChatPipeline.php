@@ -1065,26 +1065,6 @@ class ChatPipeline
      * Covers en/ur/fa/ps/sd keywords.
      */
     /**
-     * Is the user asking to be directed to a place to get vaccinated? The clear,
-     * unambiguous phrasings are matched instantly by keyword. Anything that only
-     * HINTS at a place/where/going-to-get-vaccinated is handed to the model,
-     * which understands intent far better than a regex — without paying for an
-     * LLM call on the many messages that have no location flavour at all.
-     */
-    protected function isLocationQuery(string $text): bool
-    {
-        if ($this->matchesLocationKeywords($text)) {
-            return true;
-        }
-
-        if ($this->hasLocationHint($text)) {
-            return $this->gemini->classifyLocationRequest($text);
-        }
-
-        return false;
-    }
-
-    /**
      * Broad, high-recall gate: does the message mention a place / where / going
      * to get vaccinated, in any supported language? Only these get the LLM
      * intent check; everything else is definitely not a location request.
@@ -1144,19 +1124,31 @@ class ChatPipeline
      */
     protected function maybeSiteAnswer(Chat $chat, string $userText, string $language, ?array $location, float $started, ?callable $onDelta = null, ?callable $onStatus = null): ?array
     {
-        if (! $this->isLocationQuery($userText)) {
+        // Only location-flavoured messages get this far; general questions skip
+        // the LLM entirely (hasLocationHint is a cheap, broad keyword gate).
+        $keyword = $this->matchesLocationKeywords($userText);
+        if (! $keyword && ! $this->hasLocationHint($userText)) {
             return null;
         }
 
-        // Prefer GPS (exact nearest). With no fix, try the area the user NAMED
-        // ("I live in Chishti Nagar") via the LLM matcher, then fall back to the
-        // worker's registered union council — so the answer still works without
-        // GPS or even registration.
+        // ONE LLM call decides both: is this a request for a place to get
+        // vaccinated, and does the user NAME a (possibly far) area?
+        $analysis = $this->gemini->analyzeLocationQuery($userText, $this->locator->knownAreas());
+        if (! $keyword && ! $analysis['wants_site_location']) {
+            return null; // e.g. "where on the body is it injected" — let RAG answer
+        }
+        $area = $analysis['area'] !== '' ? $analysis['area'] : null;
+
+        // A NAMED area wins — it is an explicit request and MAY BE FAR from the
+        // user ("sites in Chishti Nagar"). Otherwise use the user's GPS nearest,
+        // then their registered union council.
         $hits = [];
-        if ($location && isset($location['lat'], $location['lng'])) {
+        if ($area) {
+            $hits = $this->locator->sitesInArea($area, 3);
+        }
+        if (empty($hits) && $location && isset($location['lat'], $location['lng'])) {
             $near = $this->locator->nearest((float) $location['lat'], (float) $location['lng'], 3);
-            // Drop implausibly far GPS results (wrong city / bad site coordinate) so
-            // a named area or the registered UC is used instead of ~1000 km sites.
+            // Drop implausibly far GPS results (wrong city / bad site coordinate).
             $maxKm = (float) config('rag.site_max_distance_km', 100);
             $hits = array_values(array_filter($near, fn ($h) => ($h['distance_km'] ?? INF) <= $maxKm));
         }
@@ -1164,15 +1156,6 @@ class ChatPipeline
             $worker = Worker::where('device_id', $chat->device_id)->first();
             if ($worker && $worker->union_council) {
                 $hits = $this->locator->ucHits($worker->union_council, 3);
-            }
-        }
-        // Last resort (unregistered + no usable GPS): did they NAME an area? This
-        // is the only branch needing an LLM call, so it runs last — registered or
-        // GPS users never pay for it.
-        if (empty($hits)) {
-            $area = $this->gemini->extractMentionedArea($userText, $this->locator->knownAreas());
-            if ($area) {
-                $hits = $this->locator->sitesInArea($area, 3);
             }
         }
         if (empty($hits)) {

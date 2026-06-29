@@ -588,95 +588,42 @@ class Gemini
     }
 
     /**
-     * Decide whether the user wants to be DIRECTED TO A PLACE where they (or a
-     * child) can GO to get vaccinated — a centre/site/clinic/nearest location —
-     * as opposed to any other question. Used to route to the live site locator
-     * instead of relying on brittle keyword matching. Cheap (flash-lite, thinking
-     * off, tiny output); best-effort and defaults to false on any error.
-     */
-    public function classifyLocationRequest(string $userText): bool
-    {
-        $userText = trim($userText);
-        if ($userText === '') {
-            return false;
-        }
-
-        // The chat model (flash) — flash-lite is too weak for this nuanced
-        // Urdu intent call (it swings between over-eager and over-conservative).
-        $model = (string) (config('rag.gemini.classify_model') ?: $this->chatModel);
-        $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
-
-        $prompt = "You route messages for a Pakistani vaccination assistant (Urdu/English/Pashto/Sindhi). "
-            ."Answer ONLY with JSON {\"wants_site_location\": true|false}.\n\n"
-            ."TRUE = the user wants to be told a PHYSICAL PLACE / centre / site / clinic they can GO to in "
-            ."order to get a vaccination — e.g. 'where can I get vaccinated', 'I live in X, where can I get "
-            ."the vaccine', 'share the nearest location', 'which place in my area gives the shot'.\n"
-            ."FALSE = anything else, ESPECIALLY where ON THE BODY / in the body a vaccine is injected "
-            ."(arm, thigh, 'جسم میں کہاں'), the schedule/timing/age, doses, side effects/fever, cold "
-            ."chain, eligibility, or general knowledge.\n\n"
-            ."Examples:\n"
-            ."'میں چشتی نگر میں رہتا ہوں کہاں سے ٹیکا لگوا سکتا ہوں' => true\n"
-            ."'قریب ترین ویکسینیشن سینٹر کہاں ہے' => true\n"
-            ."'لوکیشن شیئر کریں جہاں سے ٹیکا لگ سکے' => true\n"
-            ."'ہمارے علاقے میں ٹیکا کہاں سے لگوائیں' => true\n"
-            ."'ٹیکہ جسم میں کہاں لگایا جاتا ہے' => false\n"
-            ."'ٹیکہ بازو میں لگتا ہے یا ران میں' => false\n"
-            ."'خسرہ کا ٹیکہ کب لگتا ہے' => false\n"
-            ."'ٹیکا لگنے کے بعد بخار کیوں ہوتا ہے' => false\n\n"
-            ."Message: {$userText}";
-
-        try {
-            $resp = $this->postWithRetry($url, [
-                'contents' => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
-                'generationConfig' => [
-                    'temperature' => 0.0,
-                    'thinkingConfig' => ['thinkingBudget' => 0],
-                    'maxOutputTokens' => 64,
-                    'responseMimeType' => 'application/json',
-                    'responseSchema' => [
-                        'type' => 'object',
-                        'properties' => ['wants_site_location' => ['type' => 'boolean']],
-                        'required' => ['wants_site_location'],
-                    ],
-                ],
-            ], maxAttempts: 2, maxWaitMs: 4000);
-
-            $raw = $resp->json('candidates.0.content.parts.0.text', '{}');
-            $parsed = json_decode((string) $raw, true);
-
-            return (bool) ($parsed['wants_site_location'] ?? false);
-        } catch (Throwable $e) {
-            // Best-effort — the keyword fast-path already covers the common asks.
-            return false;
-        }
-    }
-
-    /**
-     * When the user NAMES an area/place (any language or script), match it to one
-     * of the known site areas — e.g. Urdu "چشتی نگر" -> "Chishti Nagar-7". Returns
-     * the matched area string (guaranteed to be one of $areas) or null. Lets a
-     * user find sites without GPS or registration. Best-effort, null on error.
+     * One call that does BOTH location-routing decisions: is the user asking for
+     * a PLACE to get vaccinated, and do they NAME a (possibly far) known area?
+     * Returns ['wants_site_location' => bool, 'area' => string] where area is ''
+     * or one of $areas (validated, so it can't hallucinate). flash (flash-lite is
+     * too weak for this nuanced Urdu call); best-effort, safe default on error.
      *
      * @param  array<int, string>  $areas
+     * @return array{wants_site_location: bool, area: string}
      */
-    public function extractMentionedArea(string $userText, array $areas): ?string
+    public function analyzeLocationQuery(string $userText, array $areas): array
     {
+        $default = ['wants_site_location' => false, 'area' => ''];
         $userText = trim($userText);
-        if ($userText === '' || empty($areas)) {
-            return null;
+        if ($userText === '') {
+            return $default;
         }
 
         $model = (string) (config('rag.gemini.classify_model') ?: $this->chatModel);
         $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
 
         $list = implode("\n", array_map(fn ($a) => "- {$a}", $areas));
-        $prompt = "A user is asking where to get vaccinated and may NAME an area/place — in any "
-            ."language or script (e.g. Urdu 'چشتی نگر' = 'Chishti Nagar-7', 'گجرو' = a 'Gujro Zone'). "
-            ."From the KNOWN AREAS list below, return the SINGLE entry the user is referring to, "
-            ."matching across scripts and spellings; if they name a broader area pick the closest "
-            ."listed match. If they do NOT name any place, or it is not in the list, return an empty "
-            ."string. Return EXACTLY one of the listed strings, verbatim.\n\n"
-            ."KNOWN AREAS:\n{$list}\n\nUSER MESSAGE: {$userText}";
+        $prompt = "You route messages for a Pakistani vaccination assistant (Urdu/English/Pashto/Sindhi). "
+            ."Return JSON {\"wants_site_location\": bool, \"area\": string}.\n\n"
+            ."wants_site_location = TRUE if the user wants to be told a PHYSICAL place / centre / site / "
+            ."clinic to GO to in order to get vaccinated — e.g. 'where can I get vaccinated', 'I live in X "
+            ."where can I get the vaccine', 'sites near X', 'share the location'. FALSE for anything else, "
+            ."ESPECIALLY where ON THE BODY a vaccine is injected (arm/thigh/'جسم میں کہاں'), schedule/timing/"
+            ."age, doses, side effects/fever, cold chain, or general knowledge.\n\n"
+            ."area = if the user NAMES a place — in ANY language/script (e.g. 'چشتی نگر'='Chishti Nagar-7', "
+            ."'گجرو'=a 'Gujro Zone') — return the SINGLE matching entry from KNOWN AREAS, verbatim; matching "
+            ."across scripts/spellings, closest match for a broader area. The named place MAY BE FAR from "
+            ."the user — return it anyway. If they name no place (or it's not listed), return empty string.\n\n"
+            ."Examples: 'قریب ترین سینٹر کہاں ہے' => wants=true, area=''. 'میں چشتی نگر میں رہتا ہوں کہاں ٹیکا "
+            ."لگے' => wants=true, area='Chishti Nagar-7'. 'ٹیکہ جسم میں کہاں لگتا ہے' => wants=false, area=''. "
+            ."'خسرہ کا ٹیکہ کب لگتا ہے' => wants=false, area=''.\n\n"
+            ."KNOWN AREAS:\n{$list}\n\nMESSAGE: {$userText}";
 
         try {
             $resp = $this->postWithRetry($url, [
@@ -684,24 +631,32 @@ class Gemini
                 'generationConfig' => [
                     'temperature' => 0.0,
                     'thinkingConfig' => ['thinkingBudget' => 0],
-                    'maxOutputTokens' => 64,
+                    'maxOutputTokens' => 80,
                     'responseMimeType' => 'application/json',
                     'responseSchema' => [
                         'type' => 'object',
-                        'properties' => ['area' => ['type' => 'string']],
-                        'required' => ['area'],
+                        'properties' => [
+                            'wants_site_location' => ['type' => 'boolean'],
+                            'area' => ['type' => 'string'],
+                        ],
+                        'required' => ['wants_site_location', 'area'],
                     ],
                 ],
             ], maxAttempts: 2, maxWaitMs: 4000);
 
             $raw = $resp->json('candidates.0.content.parts.0.text', '{}');
             $parsed = json_decode((string) $raw, true);
-            $area = is_array($parsed) ? trim((string) ($parsed['area'] ?? '')) : '';
+            if (! is_array($parsed)) {
+                return $default;
+            }
+            $area = trim((string) ($parsed['area'] ?? ''));
 
-            // Only accept an exact known area (guard against hallucinated names).
-            return ($area !== '' && in_array($area, $areas, true)) ? $area : null;
+            return [
+                'wants_site_location' => (bool) ($parsed['wants_site_location'] ?? false),
+                'area' => in_array($area, $areas, true) ? $area : '', // validate
+            ];
         } catch (Throwable $e) {
-            return null;
+            return $default;
         }
     }
 
