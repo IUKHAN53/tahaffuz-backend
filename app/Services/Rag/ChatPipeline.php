@@ -1093,7 +1093,9 @@ class ChatPipeline
     {
         return (bool) (
             preg_match('/\b(where|place|location|site|cent(er|re)|clinic|hospital|near|nearest|address|markaz)\b/i', $text)
-            || preg_match('/(کہاں|کدھر|کجا|جگہ|مقام|لوکیشن|جائے|جاؤں|جانا|قریب|نزدیک|مرکز|سینٹر|کلینک|ہسپتال|سائٹ|کیمپ|لگوا|لگوانا|چیرته|چېرته|ځای|ڪٿي|نږدې|درمانگاه)/u', $text)
+            // Urdu / Pashto / Sindhi / Farsi place / where / get-vaccinated words.
+            // Sindhi spells "where" ڪٿان/ڪاڏي and "vaccine" ويڪسين; Farsi "کجا/واکسن".
+            || preg_match('/(کہاں|کدھر|کجا|جگہ|مقام|لوکیشن|جائے|جاؤں|جانا|قریب|نزدیک|مرکز|سینٹر|کلینک|ہسپتال|سائٹ|کیمپ|لگوا|لگوانا|چیرته|چېرته|ځای|ڪٿي|ڪٿان|ڪاڏي|ويجهو|ويڪسين|لڳائ|واکسن|نږدې|درمانگاه)/u', $text)
         );
     }
 
@@ -1126,7 +1128,7 @@ class ChatPipeline
         // auxiliary "جاتا/جاتی/جاتے" ("is being done"), or body-site questions
         // like "کہاں لگایا جاتا ہے" would false-match.
         $whereGo = preg_match('/(کہاں سے|کدھر سے|جہاں سے|کس جگہ سے|جگہ.{0,18}(جہاں|سے|کہاں)|کہاں.{0,12}(جاؤں|جانا|جائ|جاؤ|جا\s*سک|لگوا|ملے|لگوں)|لگوا.{0,12}کہاں|کجا|چیرته|چېرته|ڪٿي|ڪٿان|kahan se|kidhar se|jagah)/u', $text);
-        $vaccinate = preg_match('/(ٹیکا|ٹیکہ|ویکسین|پولیو|واکسین|ویکسینیشن|tika|teeka|vaccin|polio|immuni)/iu', $text);
+        $vaccinate = preg_match('/(ٹیکا|ٹیکہ|ویکسین|ويڪسين|پولیو|واکسین|واکسن|ویکسینیشن|ٽڪو|tika|teeka|vaccin|polio|immuni)/iu', $text);
 
         return (bool) ($whereGo && $vaccinate);
     }
