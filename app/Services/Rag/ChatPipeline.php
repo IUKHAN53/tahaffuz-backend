@@ -1201,8 +1201,12 @@ class ChatPipeline
         // Identity questions — a prefix match is safe ("who are you exactly?").
         $identityPatterns = [
             '/^(who are you|what are you|introduce yourself|tell me about yourself|what is tahaffuz|what is tika dost|what is this)\b/i',
-            '/^(تم کون ہو|آپ کون ہیں|تعارف|اپنا تعارف|تحفظ کیا ہے|ٹیکہ دوست کیا ہے)/u',
-            '/^(tum kaun ho|aap kaun hain|taaruf|apna taaruf|tahaffuz kya hai|tika dost kya hai)\b/i',
+            // "who/what are you" — any آپ/تم/تو + کون/کیا + ہو/ہیں/ہے mix.
+            '/(آپ|تم|تو)\s*کون\s*(ہو|ہیں|ہے)/u',
+            '/(آپ|تم|تو)\s*کیا\s*(ہو|ہیں|ہے)/u',
+            '/^(تعارف|اپنا تعارف|اپنا تعارف کر|تحفظ کیا ہے|ٹیکہ ?دوست (کیا|کون)|(آپ کا|تمہارا) نام کیا)/u',
+            '/\b(aap|tum|tu) kaun (ho|hain|hai)\b/i',
+            '/^(taaruf|apna taaruf|tahaffuz kya hai|tika dost (kya|kaun)|tumhara naam kya)/i',
             '/^(ته څوک یې|تاسو څوک یاست|ځان معرفي کړئ)/u',
             '/^(توهان ڪير آهيو|پاڻ جو تعارف)/u',
         ];
