@@ -660,6 +660,82 @@ class Gemini
         }
     }
 
+    /**
+     * Translate a short admin/assistant message from $sourceLanguage into each of
+     * $targets (language codes) in ONE call. Returns [code => translation] for
+     * the targets that came back non-empty; empty array on error.
+     *
+     * @param  array<int, string>  $targets  e.g. ['en', 'fa', 'ps', 'sd']
+     * @return array<string, string>
+     */
+    public function translateScript(string $text, string $sourceLanguage, array $targets): array
+    {
+        $text = trim($text);
+        $targets = array_values(array_unique(array_filter($targets, fn ($t) => $t !== $sourceLanguage)));
+        if ($text === '' || empty($targets)) {
+            return [];
+        }
+
+        $names = [
+            'en' => 'English',
+            'ur' => 'Urdu (Nastaliq script)',
+            'fa' => 'Persian/Farsi (Persian script and grammar, NOT Urdu)',
+            'ps' => 'Pashto (natural Pashto)',
+            'sd' => 'Sindhi (Sindhi script)',
+        ];
+        $srcName = $names[$sourceLanguage] ?? 'Urdu';
+        $targetList = implode(', ', array_map(fn ($t) => ($names[$t] ?? $t).' as key "'.$t.'"', $targets));
+
+        $props = [];
+        foreach ($targets as $t) {
+            $props[$t] = ['type' => 'string'];
+        }
+
+        $model = (string) (config('rag.gemini.classify_model') ?: $this->chatModel);
+        $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
+
+        $prompt = "You translate short UI messages for a Pakistani vaccination assistant. Translate the "
+            ."SOURCE message (written in {$srcName}) into: {$targetList}. Preserve the meaning, tone and "
+            ."any formatting, line breaks or placeholders; write natural, fluent text in each language's "
+            ."own script. Do NOT add anything. Return a JSON object with one key per target language code.\n\n"
+            ."SOURCE:\n{$text}";
+
+        try {
+            $resp = $this->postWithRetry($url, [
+                'contents' => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
+                'generationConfig' => [
+                    'temperature' => 0.2,
+                    'thinkingConfig' => ['thinkingBudget' => 0],
+                    'maxOutputTokens' => 2048,
+                    'responseMimeType' => 'application/json',
+                    'responseSchema' => [
+                        'type' => 'object',
+                        'properties' => $props,
+                        'required' => $targets,
+                    ],
+                ],
+            ], maxAttempts: 2, maxWaitMs: 15000);
+
+            $raw = $resp->json('candidates.0.content.parts.0.text', '{}');
+            $parsed = json_decode((string) $raw, true);
+            if (! is_array($parsed)) {
+                return [];
+            }
+
+            $out = [];
+            foreach ($targets as $t) {
+                $v = trim((string) ($parsed[$t] ?? ''));
+                if ($v !== '') {
+                    $out[$t] = $v;
+                }
+            }
+
+            return $out;
+        } catch (Throwable $e) {
+            return [];
+        }
+    }
+
     public function generateFromAudio(string $systemPrompt, string $audioPath, string $audioMime, string $context): array
     {
         $bytes = @file_get_contents($audioPath);

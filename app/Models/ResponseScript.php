@@ -13,7 +13,7 @@ class ResponseScript extends Model
         'description',
         'content_ur',
         'content_en',
-        'content_rud',
+        'content_fa',
         'content_ps',
         'content_sd',
         'is_active',
@@ -56,7 +56,7 @@ class ResponseScript extends Model
                 ->map(fn (self $s) => [
                     'content_ur' => $s->content_ur,
                     'content_en' => $s->content_en,
-                    'content_rud' => $s->content_rud,
+                    'content_fa' => $s->content_fa,
                     'content_ps' => $s->content_ps,
                     'content_sd' => $s->content_sd,
                 ])

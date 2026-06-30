@@ -57,7 +57,9 @@ class TestChat extends Page
             'auto' => 'Auto-detect',
             'en' => 'English',
             'ur' => 'Urdu',
-            'rud' => 'Roman Urdu',
+            'fa' => 'Farsi',
+            'ps' => 'Pashto',
+            'sd' => 'Sindhi',
         ];
     }
 
