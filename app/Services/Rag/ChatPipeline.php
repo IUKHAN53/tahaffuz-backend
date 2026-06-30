@@ -1279,8 +1279,7 @@ class ChatPipeline
     {
         // Obvious vaccine/medical question — never an introduction, so don't pay
         // for the LLM intro check (keeps short FAQ questions fast).
-        if (preg_match('/\b(polio|bcg|penta|pcv|opv|ipv|rota|measles|booster|fever|cold ?chain|temperature|vaccinat)\b/i'
-            .'|پولیو|ویکسین|واکسین|خوراک|بخار|درجہ\s*حرارت|کولڈ\s*چین|بیمار|ٹیکہ\s*(کب|کہاں|کیوں|کتنے|لگانے)/u', $text)) {
+        if (preg_match('/\b(polio|bcg|penta|pcv|opv|ipv|rota|measles|booster|fever|cold ?chain|temperature|vaccinat)\b|پولیو|ویکسین|واکسین|خوراک|بخار|درجہ\s*حرارت|کولڈ\s*چین|بیمار|ٹیکہ\s*(کب|کہاں|کیوں|کتنے|لگانے)/iu', $text)) {
             return false;
         }
 
