@@ -1209,6 +1209,8 @@ class ChatPipeline
             '/^(taaruf|apna taaruf|tahaffuz kya hai|tika dost (kya|kaun)|tumhara naam kya)/i',
             '/^(ته څوک یې|تاسو څوک یاست|ځان معرفي کړئ)/u',
             '/^(توهان ڪير آهيو|پاڻ جو تعارف)/u',
+            // Farsi "who are you / introduce yourself".
+            '/(شما|تو)\s+(کی|که)\s+(هستید|هستی|است)|(شما|تو)\s+کیست|خودت\s+را\s+معرفی|معرفی\s+کن/u',
         ];
 
         // Bare greetings — must be the ENTIRE message, otherwise "Assalam,
@@ -1238,14 +1240,18 @@ class ChatPipeline
             return null;
         }
 
-        // Detect language from script
-        $detectedLang = $language;
-        if (preg_match('/\p{Arabic}/u', $userText)) {
+        // The selected/effective language is authoritative — use it directly so
+        // a Farsi/Sindhi/Pashto user gets that language's script. Only infer from
+        // the message script when no specific language was resolved (auto/unknown);
+        // previously any Arabic-script text was forced to Urdu, which wrongly gave
+        // Farsi users the Urdu introduction.
+        $detectedLang = in_array($language, ['en', 'ur', 'fa', 'ps', 'sd'], true) ? $language : null;
+        if ($detectedLang === null && preg_match('/\p{Arabic}/u', $userText)) {
             if (preg_match('/[ټډړږښځڅېګڼ]/u', $userText)) {
                 $detectedLang = 'ps';
             } elseif (preg_match('/[ڳڻڪڀٺٽ]/u', $userText)) {
                 $detectedLang = 'sd';
-            } elseif (! in_array($language, ['ps', 'sd'], true)) {
+            } else {
                 $detectedLang = 'ur';
             }
         }
