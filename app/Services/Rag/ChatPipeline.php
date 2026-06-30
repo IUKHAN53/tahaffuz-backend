@@ -1236,6 +1236,13 @@ class ChatPipeline
             }
         }
 
+        // The regexes can't cover every phrasing/language. For short or
+        // assistant-referencing messages they missed, let the model decide
+        // whether this is an "introduce yourself" request.
+        if (! $isIntro && $this->mightBeIntro($userText)) {
+            $isIntro = $this->gemini->isIntroductionRequest($userText);
+        }
+
         if (! $isIntro) {
             return null;
         }
@@ -1260,6 +1267,28 @@ class ChatPipeline
         // introduction so greetings never hit the refusal path.
         return ResponseScript::getContentFor('introduction', $detectedLang ?? 'ur')
             ?? $this->defaultIntroduction($detectedLang ?? 'ur');
+    }
+
+    /**
+     * Cheap gate before the LLM intro check: only short messages, or ones that
+     * reference the assistant / greet / ask for a name, are plausible "introduce
+     * yourself" requests. Long substantive questions are skipped so they never
+     * pay for the extra call.
+     */
+    protected function mightBeIntro(string $text): bool
+    {
+        $words = preg_split('/\s+/u', trim($text), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        if (count($words) <= 8) {
+            return true;
+        }
+
+        return (bool) preg_match(
+            '/\b(who are you|what are you|introduce|yourself|your name|about you|what can you do|who is tika|what is tika|tika dost)\b/i'
+            .'|اپنا تعارف|تمہارا نام|آپ کا نام|نام کیا ہے|تعارف کرا|تعارف کرو|کون ہو|کون ہیں|کون ہے'
+            .'|شما کی|شما که|خودت را معرفی|معرفي کړئ|څوک یې|څوک یاست|ڪير آهي|پاڻ جو تعارف'
+            .'|\b(apna taaruf|tumhara naam|tika dost kya|tika dost kaun|kaun ho|kya ho)\b/iu',
+            $text
+        );
     }
 
     /**

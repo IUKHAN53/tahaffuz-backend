@@ -736,6 +736,58 @@ class Gemini
         }
     }
 
+    /**
+     * Decide whether the user is asking the assistant to introduce itself — who/
+     * what it is, its name, what it can do, or a bare greeting — as opposed to an
+     * actual question. Used to serve the introduction script reliably across
+     * phrasings/languages that the regexes miss. flash; best-effort, false on error.
+     */
+    public function isIntroductionRequest(string $userText): bool
+    {
+        $userText = trim($userText);
+        if ($userText === '') {
+            return false;
+        }
+
+        $model = (string) (config('rag.gemini.classify_model') ?: $this->chatModel);
+        $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
+
+        $prompt = "You route messages for a Pakistani vaccination assistant named 'Tika Dost'. "
+            ."Return JSON {\"is_introduction\": bool}.\n\n"
+            ."TRUE if the user is asking WHO or WHAT the assistant is, asking it to introduce itself, its "
+            ."name, what it does or can help with, or sending a bare greeting (hi/hello/salam) with no "
+            ."other question. FALSE for any real question about vaccines, schedules, sites/locations, the "
+            ."cold chain, a child's status, etc. — even if it also greets.\n\n"
+            ."Examples (any language/script): 'آپ کون ہو'=>true, 'who are you'=>true, 'تم کیا کر سکتے ہو'=>true, "
+            ."'شما کی هستید'=>true, 'اپنا تعارف کراؤ'=>true, 'تاسو څوک یاست'=>true, 'salam'=>true, "
+            ."'پولیو کا ٹیکہ کب لگتا ہے'=>false, 'بچے کو بخار ہے'=>false, 'قریب ترین سینٹر کہاں ہے'=>false.\n\n"
+            ."MESSAGE: {$userText}";
+
+        try {
+            $resp = $this->postWithRetry($url, [
+                'contents' => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
+                'generationConfig' => [
+                    'temperature' => 0.0,
+                    'thinkingConfig' => ['thinkingBudget' => 0],
+                    'maxOutputTokens' => 64,
+                    'responseMimeType' => 'application/json',
+                    'responseSchema' => [
+                        'type' => 'object',
+                        'properties' => ['is_introduction' => ['type' => 'boolean']],
+                        'required' => ['is_introduction'],
+                    ],
+                ],
+            ], maxAttempts: 2, maxWaitMs: 4000);
+
+            $raw = $resp->json('candidates.0.content.parts.0.text', '{}');
+            $parsed = json_decode((string) $raw, true);
+
+            return (bool) ($parsed['is_introduction'] ?? false);
+        } catch (Throwable $e) {
+            return false;
+        }
+    }
+
     public function generateFromAudio(string $systemPrompt, string $audioPath, string $audioMime, string $context): array
     {
         $bytes = @file_get_contents($audioPath);
