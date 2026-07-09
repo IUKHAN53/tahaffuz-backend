@@ -496,6 +496,8 @@ class Gemini
             $raw = $resp->json('candidates.0.content.parts.0.text', '{}');
             $parsed = json_decode((string) $raw, true);
             if (! is_array($parsed)) {
+                Log::warning('transcribeWithGender: unparseable JSON, falling back', ['raw' => mb_substr((string) $raw, 0, 200)]);
+
                 return ['text' => '', 'gender' => 'unknown'];
             }
             $gender = strtolower(trim((string) ($parsed['gender'] ?? 'unknown')));
@@ -507,6 +509,8 @@ class Gemini
         } catch (Throwable $e) {
             // Never let gender detection break the voice turn — fall back to a
             // plain transcript with unknown gender.
+            Log::warning('transcribeWithGender failed, falling back to plain transcription', ['error' => mb_substr($e->getMessage(), 0, 300)]);
+
             return ['text' => $this->transcribe($audioPath, $audioMime, $languageHint), 'gender' => 'unknown'];
         }
     }
