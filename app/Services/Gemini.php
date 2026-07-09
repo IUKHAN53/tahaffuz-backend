@@ -460,7 +460,9 @@ class Gemini
             }
         }
         $prompt .= ' In the SAME response, also judge from the voice itself (pitch and timbre) whether '
-            .'the speaker sounds male or female; if you genuinely cannot tell, use "unknown". '
+            .'the speaker sounds male or female. Commit to your best guess — a lower-pitched voice is '
+            .'"male", a higher-pitched voice is "female". Use "unknown" ONLY when there is no usable '
+            .'speech at all (silence, noise, whisper). '
             .'Return ONLY JSON: {"transcript": <the transcript text>, "gender": "male"|"female"|"unknown"}.';
 
         try {
