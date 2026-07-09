@@ -54,12 +54,21 @@ return [
     'edge_tts' => [
         'enabled' => (bool) env('RAG_EDGE_TTS_ENABLED', true),
         'binary' => env('EDGE_TTS_BINARY', '/opt/edge-tts/bin/edge-tts'),
-        // All female voices for a consistent assistant voice across languages.
+        // Default (female) voices — used when the speaker's gender is unknown
+        // (typed questions) or detected as female.
         'voices' => [
             'en' => env('EDGE_TTS_VOICE_EN', 'en-US-AriaNeural'),
             'ur' => env('EDGE_TTS_VOICE_UR', 'ur-PK-UzmaNeural'),
             'fa' => env('EDGE_TTS_VOICE_FA', 'fa-IR-DilaraNeural'),
             'ps' => env('EDGE_TTS_VOICE_PS', 'ps-AF-LatifaNeural'),
+        ],
+        // Male counterparts — used when a voice message is detected as a male
+        // speaker so the reply is read back in a matching voice.
+        'voices_male' => [
+            'en' => env('EDGE_TTS_VOICE_EN_MALE', 'en-US-GuyNeural'),
+            'ur' => env('EDGE_TTS_VOICE_UR_MALE', 'ur-PK-AsadNeural'),
+            'fa' => env('EDGE_TTS_VOICE_FA_MALE', 'fa-IR-FaridNeural'),
+            'ps' => env('EDGE_TTS_VOICE_PS_MALE', 'ps-AF-GulNawazNeural'),
         ],
     ],
 
@@ -71,6 +80,8 @@ return [
         'model' => env('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),
         // Female voice (Sindhi + cross-language fallback) to match the rest.
         'voice' => env('OPENAI_TTS_VOICE', 'nova'),
+        // Male voice, used when the speaker is detected as male (Sindhi + fallback).
+        'voice_male' => env('OPENAI_TTS_VOICE_MALE', 'onyx'),
     ],
 
     'retrieval' => [
@@ -221,6 +232,20 @@ PROMPT,
 - در پاسخ هرگز نام یا شماره ماژول، عنوان سند، بخش یا شماره صفحه را ننویسید.
 - کلماتی مانند «ماژول ۱»، «Module 1»، «[DOC: ...]» را اصلاً به کار نبرید.
 - اطلاعات را طوری بگویید که گویی دانش خودتان است — فقط پاسخ مستقیم بدهید.
+PROMPT,
+
+    // Appended to every system prompt. Tells the assistant to answer EVERY
+    // question when the user's message contains more than one, instead of
+    // replying to only the first. Written in English (a meta-instruction) so it
+    // applies regardless of the answer language; the model still answers in the
+    // user's language.
+    'multi_question_instruction' => <<<'PROMPT'
+WHEN THE MESSAGE CONTAINS MORE THAN ONE QUESTION:
+- If the user asks several things in one message (multiple questions, or one question with several parts), answer EVERY one of them. Never answer only the first and drop the rest.
+- Address them in the SAME ORDER they were asked, as one natural, flowing reply in the user's language — deal with the first point, then the next, and so on, using ordinary connecting words ("also", "and about…", "as for…"). Write it the way a knowledgeable person would speak it aloud.
+- Do NOT format the reply as a numbered list, bullet points, headings, or with markdown symbols (*, #, -). Plain conversational sentences only — the reply is also read aloud by a voice, so symbols and list markers must not appear.
+- Keep each individual answer short (about one or two sentences). The "keep it brief" guidance applies PER question, so a message with three questions naturally produces a somewhat longer reply that still covers all three.
+- The clarifying-question rule below still takes priority in one case only: if you genuinely cannot answer WITHOUT one key missing detail (e.g. the child's age) that is needed for the questions, ask that single question first. Otherwise, answer everything you can.
 PROMPT,
 
     // Appended to every system prompt. Tells the assistant to ask ONE clarifying

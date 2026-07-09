@@ -417,6 +417,101 @@ class Gemini
     }
 
     /**
+     * Transcribe a voice message AND estimate the speaker's gender in a single
+     * call, so the reply can be read back in a matching male/female voice.
+     *
+     * Gender is a best-effort guess from the audio (pitch/timbre); callers MUST
+     * tolerate 'unknown'. On any error this falls back to plain transcription
+     * with gender 'unknown' so the voice turn always works.
+     *
+     * @return array{text: string, gender: string}  gender ∈ male|female|unknown
+     */
+    public function transcribeWithGender(string $audioPath, string $audioMime, ?string $languageHint = null): array
+    {
+        $bytes = @file_get_contents($audioPath);
+        if ($bytes === false) {
+            throw new RuntimeException("Cannot read audio file: {$audioPath}");
+        }
+
+        $model = (string) (config('rag.gemini.transcribe_model') ?: $this->chatModel);
+        $url = "{$this->baseUrl}/models/{$model}:generateContent?key={$this->apiKey}";
+
+        $prompt = 'Transcribe this audio verbatim in the EXACT language the speaker actually uses, '
+            .'written in that language\'s own native script — Pashto in Pashto script (using its '
+            .'letters ګ ړ ږ ښ ځ څ ډ ټ ڼ ې), Sindhi in Sindhi script, Urdu in Urdu script. The '
+            .'speaker may use Pashto, Sindhi, Urdu, Punjabi, English, or Roman Urdu. NEVER translate '
+            .'or convert the speech into a different language or script: if they speak Pashto, output '
+            .'Pashto; if Sindhi, output Sindhi.';
+        if ($languageHint === 'ps' || $languageHint === 'sd') {
+            $lang = $languageHint === 'ps' ? 'Pashto' : 'Sindhi';
+            $prompt .= " The speaker is speaking {$lang}. Transcribe it in {$lang} using {$lang} "
+                .'script. Do NOT output Urdu, Dari, or Persian — keep it in '.$lang.'.';
+        } else {
+            $hintName = match ($languageHint) {
+                'ur' => 'Urdu',
+                'fa' => 'Farsi (Persian)',
+                'en' => 'English',
+                default => null,
+            };
+            if ($hintName !== null) {
+                $prompt .= " If (and only if) the spoken language is genuinely ambiguous, the app is "
+                    ."currently set to {$hintName}; but the language actually spoken always takes "
+                    .'priority over this setting.';
+            }
+        }
+        $prompt .= ' In the SAME response, also judge from the voice itself (pitch and timbre) whether '
+            .'the speaker sounds male or female; if you genuinely cannot tell, use "unknown". '
+            .'Return ONLY JSON: {"transcript": <the transcript text>, "gender": "male"|"female"|"unknown"}.';
+
+        try {
+            $resp = $this->postWithRetry($url, [
+                'contents' => [[
+                    'role' => 'user',
+                    'parts' => [
+                        ['text' => $prompt],
+                        ['inlineData' => [
+                            'mimeType' => $this->normalizeAudioMime($audioMime),
+                            'data' => base64_encode($bytes),
+                        ]],
+                    ],
+                ]],
+                'generationConfig' => [
+                    'temperature' => 0.0,
+                    'thinkingConfig' => ['thinkingBudget' => 0],
+                    // Generous cap: a truncated JSON transcript would fail to parse
+                    // and force the plain-transcription fallback (an extra call).
+                    'maxOutputTokens' => 2048,
+                    'responseMimeType' => 'application/json',
+                    'responseSchema' => [
+                        'type' => 'object',
+                        'properties' => [
+                            'transcript' => ['type' => 'string'],
+                            'gender' => ['type' => 'string', 'enum' => ['male', 'female', 'unknown']],
+                        ],
+                        'required' => ['transcript', 'gender'],
+                    ],
+                ],
+            ], maxAttempts: 3, maxWaitMs: 8000);
+
+            $raw = $resp->json('candidates.0.content.parts.0.text', '{}');
+            $parsed = json_decode((string) $raw, true);
+            if (! is_array($parsed)) {
+                return ['text' => '', 'gender' => 'unknown'];
+            }
+            $gender = strtolower(trim((string) ($parsed['gender'] ?? 'unknown')));
+
+            return [
+                'text' => trim((string) ($parsed['transcript'] ?? '')),
+                'gender' => in_array($gender, ['male', 'female'], true) ? $gender : 'unknown',
+            ];
+        } catch (Throwable $e) {
+            // Never let gender detection break the voice turn — fall back to a
+            // plain transcript with unknown gender.
+            return ['text' => $this->transcribe($audioPath, $audioMime, $languageHint), 'gender' => 'unknown'];
+        }
+    }
+
+    /**
      * Map whatever MIME the upload arrived with onto a type Gemini accepts.
      * Expo records m4a (an MP4 container); PHP often reports that as video/mp4.
      */

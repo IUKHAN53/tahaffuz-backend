@@ -101,6 +101,9 @@ class ChatController extends Controller
                 'content' => $result['message']->content,
                 'citations' => $result['citations'],
                 'latency_ms' => $result['message']->latency_ms,
+                // Structured vaccination sites (location answers only) — the
+                // app renders these as tappable site cards.
+                'sites' => $result['sites'] ?? [],
             ],
         ]);
     }
@@ -168,6 +171,7 @@ class ChatController extends Controller
                         'content' => $result['message']->content,
                         'citations' => $result['citations'],
                         'latency_ms' => $result['message']->latency_ms,
+                        'sites' => $result['sites'] ?? [],
                     ],
                 ]);
             } catch (Throwable $e) {
@@ -212,11 +216,15 @@ class ChatController extends Controller
         return response()->json([
             'chat_id' => $chat->id,
             'transcript' => $result['transcript'],
+            // Best-effort speaker gender from the voice message, so the app can
+            // request a matching male/female TTS voice for the reply.
+            'voice_gender' => $result['voice_gender'] ?? 'unknown',
             'reply' => [
                 'id' => $result['message']->id,
                 'content' => $result['message']->content,
                 'citations' => $result['citations'],
                 'latency_ms' => $result['message']->latency_ms,
+                'sites' => $result['sites'] ?? [],
             ],
         ]);
     }

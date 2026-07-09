@@ -76,6 +76,10 @@ class TtsController extends Controller
         $text = trim((string) $request->query('text', ''));
         $lang = (string) $request->query('lang', '');
         $voice = (string) $request->query('voice', '') ?: (string) config('rag.gemini.tts_voice', 'Kore');
+        // Optional speaker gender — the app sends this after detecting the gender
+        // of a voice message, so the reply is read back in a matching voice.
+        // Anything other than 'male' means the default (female) voice.
+        $gender = strtolower((string) $request->query('gender', '')) === 'male' ? 'male' : 'female';
 
         if ($text === '') {
             return response()->json(['error' => 'text is required'], 422);
@@ -88,7 +92,7 @@ class TtsController extends Controller
 
         // Sindhi: OpenAI is the only model that voices it. No Edge/Gemini path.
         if ($lang === 'sd') {
-            $oa = $this->speakWithOpenAi($text, $lang);
+            $oa = $this->speakWithOpenAi($text, $lang, $gender);
 
             // Nothing else can do Sindhi — 502 lets the app use its on-device voice.
             return $oa ?? response()->json([
@@ -99,14 +103,14 @@ class TtsController extends Controller
 
         // Primary for en/ur/rud/ps: free Microsoft Edge neural voices.
         if ($this->edgeTts !== null) {
-            $edge = $this->speakWithEdge($text, $lang);
+            $edge = $this->speakWithEdge($text, $lang, $gender);
             if ($edge !== null) {
                 return $edge;
             }
         }
 
         // Fallback: OpenAI (reliable, all these languages).
-        $oa = $this->speakWithOpenAi($text, $lang);
+        $oa = $this->speakWithOpenAi($text, $lang, $gender);
         if ($oa !== null) {
             return $oa;
         }
@@ -231,9 +235,16 @@ class TtsController extends Controller
      * Synthesize with a Microsoft Edge neural voice. Returns null on any
      * failure so the caller can fall back. Cached on disk per (voice, text).
      */
-    protected function speakWithEdge(string $text, string $lang): ?Response
+    protected function speakWithEdge(string $text, string $lang, string $gender = 'female'): ?Response
     {
-        $voice = (string) config("rag.edge_tts.voices.{$lang}", '');
+        // Male speaker → male voice when one is configured for the language;
+        // otherwise fall back to the default (female) voice.
+        $voice = $gender === 'male'
+            ? (string) config("rag.edge_tts.voices_male.{$lang}", '')
+            : '';
+        if ($voice === '') {
+            $voice = (string) config("rag.edge_tts.voices.{$lang}", '');
+        }
         if ($voice === '' || $this->edgeTts === null) {
             return null;
         }
@@ -269,13 +280,15 @@ class TtsController extends Controller
      * voice for Sindhi; also a fallback for the other languages. Returns null
      * on failure. Cached on disk per (voice, lang, text).
      */
-    protected function speakWithOpenAi(string $text, string $lang): ?Response
+    protected function speakWithOpenAi(string $text, string $lang, string $gender = 'female'): ?Response
     {
         if ($this->openAiTts === null) {
             return null;
         }
 
-        $voice = (string) config('rag.openai_tts.voice', 'alloy');
+        $voice = $gender === 'male'
+            ? (string) config('rag.openai_tts.voice_male', 'onyx')
+            : (string) config('rag.openai_tts.voice', 'alloy');
         $disk = Storage::disk('local');
         $key = sha1(implode('|', ['openai', $voice, $lang, $text]));
         $path = "tts-cache/{$key}.mp3";
@@ -312,7 +325,11 @@ class TtsController extends Controller
         if (preg_match('/[ټډړږښځڅېګڼ]/u', $text)) {
             return 'ps';
         }
-        if (preg_match('/[ڳڻڪھڀٺٽ۾]/u', $text)) {
+        // Sindhi-unique letters ONLY. Note: ھ (U+06BE, do-chashmi he) is NOT
+        // included — it is extremely common in ordinary Urdu (تھا، بھی، مجھے،
+        // پھر…), so including it here made almost every Urdu answer resolve to
+        // Sindhi and get voiced by the OpenAI Sindhi voice, which mangles Urdu.
+        if (preg_match('/[ڳڻڪڀٺٽ۾]/u', $text)) {
             return 'sd';
         }
 

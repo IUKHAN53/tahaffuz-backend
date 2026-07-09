@@ -5,6 +5,9 @@ namespace App\Filament\Resources\Sites\Tables;
 use App\Models\Site;
 use Filament\Actions\Action;
 use Filament\Actions\ViewAction;
+use Filament\Forms\Components\CheckboxList;
+use Filament\Forms\Components\TimePicker;
+use Filament\Notifications\Notification;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\SelectFilter;
@@ -49,6 +52,11 @@ class SitesTable
                     ->color('success')
                     ->searchable()
                     ->sortable(),
+                TextColumn::make('timing')
+                    ->label('Timing')
+                    ->state(fn (Site $r): string => $r->timingLabel())
+                    ->icon('heroicon-o-clock')
+                    ->toggleable(),
                 TextColumn::make('coordinates')
                     ->label('Location (tap to open map)')
                     ->state(fn (Site $r): string => $r->latitude !== null && $r->longitude !== null
@@ -87,6 +95,89 @@ class SitesTable
             ->recordActions([
                 ViewAction::make()
                     ->label('Details'),
+                // Per-site override of the standard opening hours: pick the
+                // operating DAYS and the open/close TIMES. Values matching the
+                // standard are stored as NULL so those sites keep tracking any
+                // future change to the default.
+                Action::make('editTiming')
+                    ->label('Timing')
+                    ->icon('heroicon-o-clock')
+                    ->color('warning')
+                    ->modalHeading('Site timing')
+                    ->modalDescription(fn (Site $r): string => 'Opening days and hours shown on this site\'s card. Standard: '
+                        .(new Site)->timingLabel().'.')
+                    ->schema([
+                        CheckboxList::make('timing_days')
+                            ->label('Open days')
+                            ->options(Site::DAY_LABELS)
+                            ->columns(4)
+                            ->required()
+                            ->minItems(1),
+                        TimePicker::make('open_time')
+                            ->label('Opens at')
+                            ->seconds(false)
+                            ->required(),
+                        TimePicker::make('close_time')
+                            ->label('Closes at')
+                            ->seconds(false)
+                            ->required()
+                            ->after('open_time'),
+                        TimePicker::make('break_start')
+                            ->label('Break from')
+                            ->helperText('Optional mid-day break (e.g. prayer/lunch). Leave both empty for no break.')
+                            ->seconds(false)
+                            ->after('open_time')
+                            ->before('close_time')
+                            ->requiredWith('break_end'),
+                        TimePicker::make('break_end')
+                            ->label('Break until')
+                            ->seconds(false)
+                            ->after('break_start')
+                            ->before('close_time')
+                            ->requiredWith('break_start'),
+                    ])
+                    ->fillForm(fn (Site $r): array => [
+                        'timing_days' => $r->timingDays(),
+                        'open_time' => $r->openTime(),
+                        'close_time' => $r->closeTime(),
+                        'break_start' => $r->breakStart(),
+                        'break_end' => $r->breakEnd(),
+                    ])
+                    ->action(function (array $data, Site $r): void {
+                        // Normalize picker values ("H:i:s" → "HH:MM") and week order.
+                        $days = array_values(array_intersect(
+                            array_keys(Site::DAY_LABELS),
+                            array_map(fn ($d) => mb_strtolower(trim((string) $d)), (array) ($data['timing_days'] ?? [])),
+                        ));
+                        $open = Site::normalizeTime($data['open_time'] ?? null) ?? Site::DEFAULT_OPEN;
+                        $close = Site::normalizeTime($data['close_time'] ?? null) ?? Site::DEFAULT_CLOSE;
+                        // Break is stored only as a complete window; a lone
+                        // start or end means no break.
+                        $breakStart = Site::normalizeTime($data['break_start'] ?? null);
+                        $breakEnd = Site::normalizeTime($data['break_end'] ?? null);
+                        if ($breakStart === null || $breakEnd === null) {
+                            $breakStart = $breakEnd = null;
+                        }
+
+                        // Store NULLs when everything matches the standard hours,
+                        // so unchanged sites follow the default if it ever moves.
+                        $isDefault = $days === Site::DEFAULT_DAYS
+                            && $open === Site::DEFAULT_OPEN
+                            && $close === Site::DEFAULT_CLOSE;
+
+                        $r->update([
+                            'timing_days' => $isDefault || empty($days) ? null : $days,
+                            'open_time' => $isDefault ? null : $open,
+                            'close_time' => $isDefault ? null : $close,
+                            'break_start' => $breakStart,
+                            'break_end' => $breakEnd,
+                        ]);
+
+                        Notification::make()
+                            ->title('Timing updated: '.$r->refresh()->timingLabel())
+                            ->success()
+                            ->send();
+                    }),
                 Action::make('openMap')
                     ->label('Maps')
                     ->icon('heroicon-o-map')

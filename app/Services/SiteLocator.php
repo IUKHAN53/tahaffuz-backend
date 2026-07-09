@@ -217,6 +217,38 @@ class SiteLocator
         return $intro."\n".implode("\n", $lines);
     }
 
+    /**
+     * Structured site payload for the app's tappable site cards: name, area,
+     * distance, maps link, and opening hours. `timing` is the compact display
+     * label ("Mon-Sat 9AM-2PM"); the structured days/open/close fields ride
+     * along so future app screens can render schedules without re-parsing.
+     * Every site runs the standard EPI hours unless specifically overridden
+     * in the admin, so `timing` is always present.
+     *
+     * @param  array<int, array{site: Site, distance_km?: float}>  $hits
+     * @return array<int, array<string, mixed>>
+     */
+    public function sitesPayload(array $hits): array
+    {
+        return array_map(function (array $h): array {
+            $s = $h['site'];
+            $area = trim((string) $s->union_council);
+
+            return [
+                'name' => $this->siteName($s),
+                'area' => $area !== '' ? $area : null,
+                'distance_km' => isset($h['distance_km']) ? round((float) $h['distance_km'], 1) : null,
+                'maps_url' => $this->mapsUrl($s),
+                'timing' => $s->timingLabel(),
+                'timing_days' => $s->timingDays(),
+                'open_time' => $s->openTime(),
+                'close_time' => $s->closeTime(),
+                'break_start' => $s->breakStart(),
+                'break_end' => $s->breakEnd(),
+            ];
+        }, $hits);
+    }
+
     /** Google Maps pin URL for a site, or null when it has no coordinates. */
     public function mapsUrl(Site $s): ?string
     {

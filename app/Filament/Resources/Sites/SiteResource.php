@@ -49,6 +49,11 @@ class SiteResource extends Resource
                     TextEntry::make('outreach_site')->label('Outreach Site')->placeholder('Fixed Site')->columnSpanFull(),
                     TextEntry::make('district')->label('District')->badge()->color('info'),
                     TextEntry::make('union_council')->label('Union Council')->badge()->color('success'),
+                    TextEntry::make('timing')
+                        ->label('Opening hours')
+                        ->icon('heroicon-o-clock')
+                        ->state(fn (Site $r): string => $r->timingLabel())
+                        ->columnSpanFull(),
                 ]),
 
             Section::make('Location')

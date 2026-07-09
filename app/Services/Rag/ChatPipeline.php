@@ -322,7 +322,11 @@ class ChatPipeline
     {
         $started = microtime(true);
 
-        $transcript = trim($this->transcribe($audioPath, $audioMime, $language));
+        // Transcribe and, on the Gemini path, detect the speaker's gender so the
+        // reply is voiced back to match (male↔male, female↔female).
+        $voice = $this->transcribeVoice($audioPath, $audioMime, $language);
+        $transcript = trim($voice['text']);
+        $gender = $voice['gender'] ?? 'unknown';
 
         // Nothing intelligible came back (silent clip, mic glitch). Reply with a
         // gentle prompt to try again instead of embedding an empty query.
@@ -335,7 +339,7 @@ class ChatPipeline
                 'meta' => ['source' => 'voice', 'inaudible' => true],
                 'latency_ms' => (int) ((microtime(true) - $started) * 1000),
             ]);
-            return ['message' => $assistant, 'citations' => [], 'transcript' => ''];
+            return ['message' => $assistant, 'citations' => [], 'transcript' => '', 'voice_gender' => $gender];
         }
 
         // The selected language drives the reply (auto-detect only as fallback).
@@ -345,7 +349,7 @@ class ChatPipeline
             'chat_id' => $chat->id,
             'role' => Message::ROLE_USER,
             'content' => $transcript,
-            'meta' => ['source' => 'voice'],
+            'meta' => ['source' => 'voice', 'voice_gender' => $gender],
         ]);
 
         $this->maybeAssignTitle($chat, $transcript);
@@ -362,17 +366,17 @@ class ChatPipeline
                 'latency_ms' => (int) ((microtime(true) - $started) * 1000),
             ]);
             $chat->touch();
-            return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript];
+            return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript, 'voice_gender' => $gender];
         }
 
         // Spoken "where can I get vaccinated?" — answer from live site data + GPS.
         if ($siteAnswer = $this->maybeSiteAnswer($chat, $transcript, $effectiveLanguage, $location, $started)) {
-            return $siteAnswer + ['transcript' => $transcript];
+            return $siteAnswer + ['transcript' => $transcript, 'voice_gender' => $gender];
         }
 
         // Spoken "what's pending for this child?" — answer from the scanned card.
         if ($cardAnswer = $this->maybeCardAnswer($chat, $transcript, $effectiveLanguage, $started)) {
-            return $cardAnswer + ['transcript' => $transcript];
+            return $cardAnswer + ['transcript' => $transcript, 'voice_gender' => $gender];
         }
 
         // Admin-curated answer (feedback loop) wins over RAG.
@@ -386,14 +390,14 @@ class ChatPipeline
                 'latency_ms' => (int) ((microtime(true) - $started) * 1000),
             ]);
             $chat->touch();
-            return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript];
+            return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript, 'voice_gender' => $gender];
         }
 
         [$context, $citations, $weak] = $this->gatherContext($chat, $transcript);
 
         if ($weak) {
             $assistant = $this->refuse($chat, $started, 'voice', language: $effectiveLanguage, userText: $transcript);
-            return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript];
+            return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript, 'voice_gender' => $gender];
         }
         $history = $this->history($chat, exclude: 1);
 
@@ -412,13 +416,13 @@ class ChatPipeline
             'role' => Message::ROLE_ASSISTANT,
             'content' => $replyText !== '' ? $replyText : $this->refusalText($effectiveLanguage, $transcript),
             'citations' => $citations,
-            'meta' => ['usage' => $reply['usage'] ?? [], 'source' => 'voice', 'language' => $effectiveLanguage],
+            'meta' => ['usage' => $reply['usage'] ?? [], 'source' => 'voice', 'language' => $effectiveLanguage, 'voice_gender' => $gender],
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
         ]);
 
         $chat->touch();
 
-        return ['message' => $assistant, 'citations' => $citations, 'transcript' => $transcript];
+        return ['message' => $assistant, 'citations' => $citations, 'transcript' => $transcript, 'voice_gender' => $gender];
     }
 
     /**
@@ -717,6 +721,13 @@ class ChatPipeline
             'auto' => $basePrompt . "\n\nIMPORTANT: Detect the language of the user's question and respond in that SAME language. The knowledge base is in Urdu, so understand the Urdu content first, then formulate a natural response in the user's language. Do NOT translate word-by-word - provide natural, fluent responses. Supported languages include but are not limited to: Farsi/Persian, Punjabi, Arabic, Hindi, Turkish, Bengali, and others.",
             default => $basePrompt,
         };
+
+        // When a message bundles several questions, answer all of them in order
+        // (natural prose, no lists) instead of replying to just the first.
+        $multi = trim((string) config('rag.multi_question_instruction', ''));
+        if ($multi !== '') {
+            $prompt .= "\n\n" . $multi;
+        }
 
         // Let the assistant ask for a missing key detail (e.g. the child's age)
         // instead of committing to a wrong answer.
@@ -1181,17 +1192,21 @@ class ChatPipeline
             $onDelta($text);
         }
 
+        // Structured sites for the app's tappable site cards (name, distance,
+        // maps link, and opening hours once the site data has them).
+        $sites = $this->locator->sitesPayload($hits);
+
         $assistant = Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_ASSISTANT,
             'content' => $text,
             'citations' => [],
-            'meta' => ['source' => 'location', 'language' => $language] + ($onDelta ? ['streamed' => true] : []),
+            'meta' => ['source' => 'location', 'language' => $language, 'sites' => $sites] + ($onDelta ? ['streamed' => true] : []),
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
         ]);
         $chat->touch();
 
-        return ['message' => $assistant, 'citations' => []];
+        return ['message' => $assistant, 'citations' => [], 'sites' => $sites];
     }
 
     protected function maybeIntroduction(string $userText, ?string $language): ?string
@@ -1311,30 +1326,31 @@ class ChatPipeline
         };
     }
 
-    protected function transcribe(string $audioPath, string $audioMime, ?string $language = null): string
+    /**
+     * Transcribe a voice turn and, when possible, detect the speaker's gender so
+     * the reply can be read back in a matching voice. Whisper (if configured as
+     * the STT provider) reports no gender, so that path returns 'unknown'; the
+     * default Gemini path returns a best-effort gender.
+     *
+     * @return array{text: string, gender: string}
+     */
+    protected function transcribeVoice(string $audioPath, string $audioMime, ?string $language = null): array
     {
-        // Use Whisper if available for better multilingual transcription. Force
-        // the language only for the Arabic-script tongues the user may have
-        // explicitly chosen (ur/ps/sd); for en/rud/unknown let Whisper auto-
-        // detect so a Pashto speaker on an English app isn't forced to English.
         if ($this->whisper !== null) {
             try {
                 $whisperLang = in_array($language, ['ur', 'ps', 'sd'], true) ? $language : null;
                 $result = $this->whisper->transcribe($audioPath, $whisperLang);
                 $text = trim($result['text'] ?? '');
                 if ($text !== '') {
-                    return $text;
+                    return ['text' => $text, 'gender' => 'unknown'];
                 }
-                // Empty transcript — fall through to Gemini.
+                // Empty transcript — fall through to Gemini (which also gives gender).
             } catch (Throwable $e) {
-                // Fall back to Gemini if Whisper fails
+                // Fall back to Gemini if Whisper fails.
             }
         }
 
-        // Delegated to the Gemini service so transcription shares the same
-        // 429-aware retry/back-off as every other call — a transient rate
-        // limit no longer surfaces to the app as a 500.
-        return $this->gemini->transcribe($audioPath, $audioMime, $language);
+        return $this->gemini->transcribeWithGender($audioPath, $audioMime, $language);
     }
 
     /**
