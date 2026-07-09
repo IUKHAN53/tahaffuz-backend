@@ -1303,8 +1303,12 @@ class ChatPipeline
             return true;
         }
 
+        // NOTE: this must stay ONE regex with a single /…/iu delimiter pair.
+        // Concatenating separately-delimited fragments ('/…/i'.'|…/iu') makes
+        // PHP treat everything after the first closing "/" as modifiers →
+        // "Unknown modifier '|'" → 503 for every >8-word non-vaccine message.
         return (bool) preg_match(
-            '/\b(who are you|what are you|introduce|yourself|your name|about you|what can you do|who is tika|what is tika|tika dost)\b/i'
+            '/\b(who are you|what are you|introduce|yourself|your name|about you|what can you do|who is tika|what is tika|tika dost)\b'
             .'|اپنا تعارف|تمہارا نام|آپ کا نام|نام کیا ہے|تعارف کرا|تعارف کرو|کون ہو|کون ہیں|کون ہے'
             .'|شما کی|شما که|خودت را معرفی|معرفي کړئ|څوک یې|څوک یاست|ڪير آهي|پاڻ جو تعارف'
             .'|\b(apna taaruf|tumhara naam|tika dost kya|tika dost kaun|kaun ho|kya ho)\b/iu',
