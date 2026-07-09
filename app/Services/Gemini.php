@@ -479,7 +479,9 @@ class Gemini
                 ]],
                 'generationConfig' => [
                     'temperature' => 0.0,
-                    'thinkingConfig' => ['thinkingBudget' => 0],
+                    // A little thinking is required here: with 0 the model skips
+                    // acoustic analysis entirely and labels every voice female.
+                    'thinkingConfig' => ['thinkingBudget' => 256],
                     // Generous cap: a truncated JSON transcript would fail to parse
                     // and force the plain-transcription fallback (an extra call).
                     'maxOutputTokens' => 2048,
