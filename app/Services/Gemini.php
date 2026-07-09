@@ -459,11 +459,11 @@ class Gemini
                     .'priority over this setting.';
             }
         }
-        $prompt .= ' In the SAME response, also judge from the voice itself (pitch and timbre) whether '
-            .'the speaker sounds male or female. Commit to your best guess — a lower-pitched voice is '
-            .'"male", a higher-pitched voice is "female". Use "unknown" ONLY when there is no usable '
-            .'speech at all (silence, noise, whisper). '
-            .'Return ONLY JSON: {"transcript": <the transcript text>, "gender": "male"|"female"|"unknown"}.';
+        $prompt .= ' BEFORE transcribing, FIRST listen to the ACOUSTICS of the voice itself — the pitch '
+            .'and timbre of the audio signal, NOT the words — and decide the speaker\'s gender: a '
+            .'low-pitched/deep voice is "male", a high-pitched voice is "female". Commit to your best '
+            .'guess; use "unknown" ONLY when there is no usable speech at all (silence or noise). '
+            .'Return ONLY JSON with gender FIRST: {"gender": "male"|"female"|"unknown", "transcript": <the transcript text>}.';
 
         try {
             $resp = $this->postWithRetry($url, [
@@ -487,10 +487,14 @@ class Gemini
                     'responseSchema' => [
                         'type' => 'object',
                         'properties' => [
-                            'transcript' => ['type' => 'string'],
+                            // Gender FIRST: generated before the transcript so the
+                            // judgment conditions on the audio's acoustics, not on
+                            // the (genderless) words it is about to transcribe.
                             'gender' => ['type' => 'string', 'enum' => ['male', 'female', 'unknown']],
+                            'transcript' => ['type' => 'string'],
                         ],
-                        'required' => ['transcript', 'gender'],
+                        'required' => ['gender', 'transcript'],
+                        'propertyOrdering' => ['gender', 'transcript'],
                     ],
                 ],
             ], maxAttempts: 3, maxWaitMs: 8000);
