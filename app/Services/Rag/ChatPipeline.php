@@ -497,9 +497,10 @@ class ChatPipeline
             return true;
         }
 
-        // "Unclear question / ask again" deflections in any of our languages.
+        // "Unclear question / ask again / can't understand" deflections in any
+        // of our languages — every phrasing observed in production so far.
         return (bool) preg_match(
-            '/واضح نہیں|سوال دوبارہ|دوبارہ پوچھیں|not clear|unclear|rephrase|واضح نیست|دوباره بپرسید|روښانه نه|بیا پوښتنه|واضح ناهي|ٻيهر پڇو/iu',
+            '/واضح نہیں|سوال دوبارہ|دوبارہ پوچھیں|سمجھ نہیں|نہیں سمجھ|not clear|unclear|rephrase|cannot understand|درک نمی|متوجه نمی|واضح نیست|دوباره بپرسید|روښانه نه|نه پوهېږم|بیا پوښتنه|واضح ناهي|سمجهه ۾ نه|ٻيهر پڇو/iu',
             mb_substr($t, 0, 200),
         );
     }
