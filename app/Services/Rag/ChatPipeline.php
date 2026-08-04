@@ -817,11 +817,16 @@ class ChatPipeline
             $prompt .= "\n\n" . $multi;
         }
 
-        // Let the assistant ask for a missing key detail (e.g. the child's age)
-        // instead of committing to a wrong answer.
-        $clarify = trim((string) config('rag.clarification_instruction', ''));
-        if ($clarify !== '') {
-            $prompt .= "\n\n" . $clarify;
+        // Clarifying questions are OPT-IN (rag.clarification_enabled, default
+        // off). With it on, the model answered plain factual questions with
+        // "your question is not clear — ask again" instead of the documented
+        // answer, which is the opposite of the product requirement (answer
+        // strictly and directly from the modules).
+        if (config('rag.clarification_enabled', false)) {
+            $clarify = trim((string) config('rag.clarification_instruction', ''));
+            if ($clarify !== '') {
+                $prompt .= "\n\n" . $clarify;
+            }
         }
 
         return $prompt;
@@ -1341,10 +1346,11 @@ class ChatPipeline
             }
         }
 
-        // The regexes can't cover every phrasing/language. For short or
-        // assistant-referencing messages they missed, let the model decide
-        // whether this is an "introduce yourself" request.
-        if (! $isIntro && $this->mightBeIntro($userText)) {
+        // OPTIONAL LLM fallback for phrasings the regexes miss. Off by default:
+        // it false-positived on ordinary "X کیا ہے؟" ("what is X?") questions —
+        // e.g. "شیک ٹیسٹ کیا ہے؟" / "کولڈ چین کیا ہے؟" — answering the
+        // introduction script instead of the documented answer.
+        if (! $isIntro && config('rag.intro_llm_fallback', false) && $this->mightBeIntro($userText)) {
             $isIntro = $this->gemini->isIntroductionRequest($userText);
         }
 

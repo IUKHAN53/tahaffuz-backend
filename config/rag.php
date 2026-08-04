@@ -271,9 +271,19 @@ WHEN THE MESSAGE CONTAINS MORE THAN ONE QUESTION:
 - Answer every question you can from the CONTEXT. Only when ALL of them hinge on one unknown detail about a specific child (see the clarification rule) may you ask that single question instead.
 PROMPT,
 
-    // Appended to every system prompt. Tells the assistant to ask ONE clarifying
-    // question whenever the request is unclear or incomplete, instead of guessing
-    // and committing to a possibly wrong answer.
+    // Clarifying questions, OFF by default. When enabled, the model too often
+    // answered plain factual questions ("at what temperature are vaccines
+    // kept?") with "your question is not clear — please ask again" instead of
+    // the documented answer. The product requirement is to answer strictly and
+    // directly from the modules, so the instruction below is opt-in only.
+    'clarification_enabled' => (bool) env('RAG_CLARIFICATION', false),
+
+    // LLM fallback for detecting "introduce yourself" requests, OFF by default:
+    // it false-positived on ordinary "what is X?" questions in Urdu and served
+    // the introduction script instead of the answer. Regex detection stays on.
+    'intro_llm_fallback' => (bool) env('RAG_INTRO_LLM_FALLBACK', false),
+
+    // Appended to every system prompt WHEN clarification_enabled is true.
     'clarification_instruction' => <<<'PROMPT'
 ANSWER FIRST. Clarifying questions are the RARE exception, not the default:
 - DEFAULT: if the CONTEXT covers the topic, ANSWER IT NOW. General questions ("at what temperature are vaccines kept", "what is the shake test", "when is BCG given") are ALWAYS answered directly from the CONTEXT — they need no clarification. If the CONTEXT gives a general rule plus exceptions, state both (e.g. "most vaccines at 2°C to +8°C, but OPV frozen at -15°C to -25°C"). Never ask a question just because several cases exist.
