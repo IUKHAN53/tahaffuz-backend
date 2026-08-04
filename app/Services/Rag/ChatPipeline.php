@@ -778,10 +778,14 @@ class ChatPipeline
     {
         return [
             'source' => $source,
-            'top' => array_map(fn ($h) => [
+            'top' => array_map(fn ($h) => array_filter([
                 'chunk_id' => $h['chunk']->id,
                 'score' => round((float) $h['score'], 4),
-            ], array_slice($hits, 0, 3)),
+                // Hybrid sub-scores when present — separates a dead vector
+                // signal from a dead keyword signal at a glance.
+                'vec' => isset($h['vec_score']) ? round((float) $h['vec_score'], 3) : null,
+                'kw' => isset($h['kw_score']) ? round((float) $h['kw_score'], 3) : null,
+            ], fn ($v) => $v !== null), array_slice($hits, 0, 3)),
         ];
     }
 
