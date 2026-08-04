@@ -185,7 +185,8 @@ class ChatPipeline
             'role' => Message::ROLE_ASSISTANT,
             'content' => $replyText !== '' ? $replyText : $this->refusalText($effectiveLanguage, $userText),
             'citations' => $citations,
-            'meta' => ['usage' => $reply['usage'] ?? [], 'language' => $effectiveLanguage],
+            'meta' => ['usage' => $reply['usage'] ?? [], 'language' => $effectiveLanguage]
+                + ($this->lastRetrieval ? ['retrieval' => $this->lastRetrieval] : []),
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
         ]);
 
@@ -729,18 +730,26 @@ class ChatPipeline
             }
 
             try {
-                return $this->pineconeStore->search(
+                $hits = $this->pineconeStore->search(
                     $knowledgeBaseId,
                     $queryVec,
                     $topK,
                     $minScore
                 );
+                // Empty results (outage filtered upstream, or everything below
+                // min_score) fall through to the local hybrid store, which has
+                // the BM25 keyword signal Pinecone lacks.
+                if (! empty($hits)) {
+                    $this->lastRetrieval = $this->retrievalDebug('pinecone', $hits);
+
+                    return $hits;
+                }
             } catch (Throwable $e) {
                 // Fall back to hybrid search if Pinecone fails
             }
         }
 
-        return $this->store->hybridSearch(
+        $hits = $this->store->hybridSearch(
             $knowledgeBaseId,
             $queryVec,
             $query,
@@ -749,6 +758,30 @@ class ChatPipeline
             (float) ($cfg['vec_weight'] ?? 0.55),
             (float) ($cfg['kw_weight'] ?? 0.45),
         );
+        $this->lastRetrieval = $this->retrievalDebug('hybrid', $hits);
+
+        return $hits;
+    }
+
+    /**
+     * Compact per-turn retrieval telemetry, persisted into the assistant
+     * message's meta so the admin can see which store answered and with what
+     * confidence — indispensable when hunting wrong-context answers.
+     *
+     * @var array<string, mixed>|null
+     */
+    protected ?array $lastRetrieval = null;
+
+    /** @param array<int, array{chunk: Chunk, score: float}> $hits */
+    protected function retrievalDebug(string $source, array $hits): array
+    {
+        return [
+            'source' => $source,
+            'top' => array_map(fn ($h) => [
+                'chunk_id' => $h['chunk']->id,
+                'score' => round((float) $h['score'], 4),
+            ], array_slice($hits, 0, 3)),
+        ];
     }
 
     protected function isWeak(array $hits, string $query): bool

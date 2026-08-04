@@ -32,8 +32,11 @@ class PineconeVectorStore
                 includeMetadata: true
             );
         } catch (\Throwable $e) {
+            // Rethrow so the caller's hybrid-search fallback actually runs —
+            // returning [] here silently swallowed Pinecone outages and the
+            // pipeline treated them as "no relevant content" refusals.
             Log::error('Pinecone search failed', ['error' => $e->getMessage()]);
-            return [];
+            throw $e;
         }
 
         $matches = $result['matches'] ?? [];
