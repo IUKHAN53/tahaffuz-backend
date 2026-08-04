@@ -45,9 +45,10 @@ class SyncSitesFromClm extends Command
             $k = $key($row->union_council, $row->fix_site, $row->outreach_site);
             $seen[$k] = true;
 
-            // "lat,lng" string → validated floats (invalid → import without coords).
+            // "lat,lng" (some rows "lat/lng") → validated floats; invalid →
+            // import without coords.
             $lat = $lng = null;
-            if (preg_match('/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/', (string) $row->coordinates, $m)) {
+            if (preg_match('/^\s*(-?\d+(?:\.\d+)?)\s*[,\/]\s*(-?\d+(?:\.\d+)?)\s*$/', (string) $row->coordinates, $m)) {
                 $lat = (float) $m[1];
                 $lng = (float) $m[2];
                 if ($lat < self::LAT_MIN || $lat > self::LAT_MAX || $lng < self::LNG_MIN || $lng > self::LNG_MAX) {
