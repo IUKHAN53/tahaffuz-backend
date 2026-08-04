@@ -101,6 +101,10 @@ return [
         'kw_weight' => (float) env('KW_WEIGHT', 0.45),
         // Below this RRF score, treat retrieval as "no useful context" and refuse.
         'rrf_floor' => (float) env('RRF_FLOOR', 0.012),
+        // Raw-cosine floor for keyword-less (cross-script) queries — Sindhi/
+        // Pashto/Farsi/Latin questions over the Urdu corpus rank on the vector
+        // signal alone, so their weakness is judged by cosine, not RRF.
+        'vec_only_floor' => (float) env('RAG_VEC_ONLY_FLOOR', 0.5),
 
         // Full-module context (LEGACY — now off). Feeding a whole module meant
         // the top module was always seeded regardless of budget (Module 6 ≈

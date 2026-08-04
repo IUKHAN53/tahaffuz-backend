@@ -795,18 +795,25 @@ class ChatPipeline
             return true;
         }
 
-        $floor = (float) config('rag.retrieval.rrf_floor', 0.012);
+        $top = $hits[0];
 
-        // The corpus is Urdu-script. A query written entirely in Latin letters
-        // (English or Roman Urdu) cannot meaningfully hit the BM25 keyword
-        // index, so only the multilingual vector signal fires. Holding such a
-        // query to the both-signals floor wrongly refuses valid questions, so
-        // relax the floor to a vector-only threshold.
+        // Cross-script queries barely touch the BM25 keyword index: the corpus
+        // is Urdu, so English/Roman-Urdu (Latin) AND Sindhi/Pashto/Farsi
+        // (different orthography — ويڪسين vs ویکسین) rank on the vector signal
+        // alone. Their rank-based RRF score is then a constant that can't clear
+        // the combined floor, which wrongly refused every Sindhi question —
+        // judge keyword-less matches by the raw cosine instead.
+        $kw = (float) ($top['kw_score'] ?? 0.0);
+        if (isset($top['vec_score']) && $kw < 0.15) {
+            return (float) $top['vec_score'] < (float) config('rag.retrieval.vec_only_floor', 0.5);
+        }
+
+        $floor = (float) config('rag.retrieval.rrf_floor', 0.012);
         if (! preg_match('/\p{Arabic}/u', $query)) {
             $floor *= 0.6;
         }
 
-        return ($hits[0]['score'] ?? 0.0) < $floor;
+        return ($top['score'] ?? 0.0) < $floor;
     }
 
     protected function refuse(Chat $chat, float $started, ?string $source = null, ?string $language = null, ?string $userText = null): Message
