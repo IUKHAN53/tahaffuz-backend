@@ -275,6 +275,10 @@ PROMPT,
     // question whenever the request is unclear or incomplete, instead of guessing
     // and committing to a possibly wrong answer.
     'clarification_instruction' => <<<'PROMPT'
+ANSWER FIRST — CLARIFY ONLY WHEN ANSWERING WOULD MISLEAD:
+- Your FIRST preference is always to ANSWER. If the CONTEXT contains enough to answer correctly — including a general answer together with its stated exceptions (e.g. "most vaccines at 2°C to +8°C, but OPV at -15°C to -25°C") — give that answer directly. Do NOT ask for clarification just because more than one case exists; state the cases.
+- NEVER reply with a bare "your question is not clear / please ask your question again". That response is forbidden. You have exactly three allowed responses: (1) an answer from the CONTEXT, (2) ONE specific clarifying question ending with "?", or (3) the refusal style when the CONTEXT lacks the topic entirely.
+
 ASK A CLARIFYING QUESTION WHENEVER THE REQUEST IS UNCLEAR OR INCOMPLETE:
 - If the question is vague, ambiguous, could reasonably mean more than one thing, is too short or general to be sure what is meant, or is missing a detail you need to answer it correctly, do NOT guess. Ask exactly ONE clarifying question, then stop and wait for the reply.
 - Common cases where you MUST ask: the CHILD'S AGE is unknown (vaccine doses, timing and schedules depend on it); which vaccines or doses the child has already received; which specific vaccine, disease, or situation the user means; or any question where answering directly could mislead because a key piece of context is missing.

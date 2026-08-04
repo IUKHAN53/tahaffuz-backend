@@ -482,12 +482,25 @@ class ChatPipeline
         );
     }
 
-    /** A short reply that is itself a question — i.e. a clarifying question, not an answer. */
+    /**
+     * A reply that is a clarifying question — or any "your question is not
+     * clear" style deflection — rather than an actual answer. These must never
+     * enter the shared answer cache (a cached deflection poisons the question
+     * for every user for the TTL).
+     */
     protected function isClarifyingQuestion(string $content): bool
     {
         $t = trim($content);
 
-        return mb_strlen($t) <= 160 && (bool) preg_match('/[?؟]\s*$/u', $t);
+        if (mb_strlen($t) <= 160 && preg_match('/[?؟]\s*$/u', $t)) {
+            return true;
+        }
+
+        // "Unclear question / ask again" deflections in any of our languages.
+        return (bool) preg_match(
+            '/واضح نہیں|سوال دوبارہ|دوبارہ پوچھیں|not clear|unclear|rephrase|واضح نیست|دوباره بپرسید|روښانه نه|بیا پوښتنه|واضح ناهي|ٻيهر پڇو/iu',
+            mb_substr($t, 0, 200),
+        );
     }
 
     /**
