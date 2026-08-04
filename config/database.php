@@ -46,6 +46,21 @@ return [
             'transaction_mode' => 'DEFERRED',
         ],
 
+        // Read-only peer: the EPI CLM app's MySQL DB on the same server — the
+        // authoritative outreach-site register (sites:sync-clm pulls from it).
+        'epi_clm' => [
+            'driver' => 'mysql',
+            'host' => env('EPI_CLM_DB_HOST', '127.0.0.1'),
+            'port' => env('EPI_CLM_DB_PORT', '3306'),
+            'database' => env('EPI_CLM_DB_DATABASE', 'epi_clm'),
+            'username' => env('EPI_CLM_DB_USERNAME', ''),
+            'password' => env('EPI_CLM_DB_PASSWORD', ''),
+            'charset' => 'utf8mb4',
+            'collation' => 'utf8mb4_unicode_ci',
+            'prefix' => '',
+            'strict' => true,
+        ],
+
         'mysql' => [
             'driver' => 'mysql',
             'url' => env('DB_URL'),
