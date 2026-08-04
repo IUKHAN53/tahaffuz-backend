@@ -829,6 +829,14 @@ class ChatPipeline
             }
         }
 
+        // FINAL LINE — the closing instruction carries the most weight, so the
+        // prompt must end on the answer mandate. Ending on anything that
+        // mentions asking the user made the model reply "your question is not
+        // clear, please ask again" to plain factual questions.
+        $prompt .= "\n\n".'FINAL RULE: The user is asking a real question. Answer it NOW using the CONTEXT above. '
+            .'Never reply that the question is unclear and never ask the user to repeat or rephrase it. '
+            .'If the CONTEXT genuinely does not cover the topic, say only that you do not have that information.';
+
         return $prompt;
     }
 

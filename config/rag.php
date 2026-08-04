@@ -268,7 +268,7 @@ WHEN THE MESSAGE CONTAINS MORE THAN ONE QUESTION:
 - Address them in the SAME ORDER they were asked, as one natural, flowing reply in the user's language — deal with the first point, then the next, and so on, using ordinary connecting words ("also", "and about…", "as for…"). Write it the way a knowledgeable person would speak it aloud.
 - Do NOT format the reply as a numbered list, bullet points, headings, or with markdown symbols (*, #, -). Plain conversational sentences only — the reply is also read aloud by a voice, so symbols and list markers must not appear.
 - Keep each individual answer short (about one or two sentences). The "keep it brief" guidance applies PER question, so a message with three questions naturally produces a somewhat longer reply that still covers all three.
-- Answer every question you can from the CONTEXT. Only when ALL of them hinge on one unknown detail about a specific child (see the clarification rule) may you ask that single question instead.
+- Answer every question you can from the CONTEXT.
 PROMPT,
 
     // Clarifying questions, OFF by default. When enabled, the model too often
