@@ -30,6 +30,35 @@ class SiteLocator
 
         return self::DAY_NAMES[$language][$code] ?? self::DAY_NAMES['en'][$code] ?? null;
     }
+
+    /** Localized "site is open …" phrase, e.g. "پیر–ہفتہ 9AM-2PM". */
+    protected function timingPhrase(Site $s, string $language): string
+    {
+        $names = self::DAY_NAMES[$language] ?? self::DAY_NAMES['en'];
+        $days = $s->timingDays();
+        $first = $names[$days[0]] ?? '';
+        $last = $names[$days[count($days) - 1]] ?? '';
+        $range = count($days) >= 2 ? "{$first}–{$last}" : $first;
+
+        return trim($range.' '.Site::formatTime($s->openTime()).'-'.Site::formatTime($s->closeTime()));
+    }
+
+    /**
+     * Detect whether the question is about a SPECIFIC session-day vaccine.
+     * BCG and MR vials are opened on fixed weekdays; everything else runs on
+     * the site's normal daily hours.
+     */
+    public function vaccineFocus(string $text): ?string
+    {
+        if (preg_match('/\bbcg\b|بی\s*سی\s*جی|بي\s*سي\s*جي/iu', $text)) {
+            return 'bcg';
+        }
+        if (preg_match('/\bmr\b|measles|خسرہ|خسره|سرخک|شرۍ/iu', $text)) {
+            return 'mr';
+        }
+
+        return null;
+    }
     /**
      * Nearest vaccination sites to a coordinate, by great-circle distance.
      * The site table is small (~hundreds of rows), so we load the ones with
@@ -239,15 +268,46 @@ class SiteLocator
      *
      * @param  array<int, array{site: Site, distance_km?: float}>  $hits
      */
-    public function answerText(array $hits, string $language): string
+    public function answerText(array $hits, string $language, ?string $vaccine = null): string
     {
-        $intro = match ($language) {
-            'ur' => 'آپ درج ذیل مراکز پر ٹیکا لگوا سکتے ہیں:',
-            'fa' => 'می‌توانید در مراکز زیر واکسن بزنید:',
-            'ps' => 'تاسو کولی شئ په لاندې مرکزونو کې واکسین ولګوئ:',
-            'sd' => 'توهان هيٺين هنڌن تي ويڪسين لڳائي سگهو ٿا:',
-            default => 'You can get vaccinated at the following sites:',
+        // Sites run their normal hours daily for ALL routine vaccines; only
+        // BCG and MR happen on special weekdays (multi-dose vials). So the
+        // general answer shows "open <days/hours>" plus "BCG only <day>", and
+        // a BCG/MR-specific question leads with that vaccine's day.
+        $only = match ($language) {
+            'ur' => 'صرف', 'fa' => 'فقط', 'ps' => 'یوازې', 'sd' => 'صرف', default => 'only on',
         };
+        $open = match ($language) {
+            'ur' => 'اوقات', 'fa' => 'ساعات', 'ps' => 'وخت', 'sd' => 'اوقات', default => 'open',
+        };
+
+        if ($vaccine !== null) {
+            $v = strtoupper($vaccine);
+            $intro = match ($language) {
+                'ur' => "{$v} کے لیے آپ درج ذیل مراکز پر ٹیکہ لگوا سکتے ہیں:",
+                'fa' => "برای {$v} می‌توانید در مراکز زیر واکسن بزنید:",
+                'ps' => "د {$v} لپاره تاسو په لاندې مرکزونو کې واکسین لګولی شئ:",
+                'sd' => "{$v} لاءِ توهان هيٺين هنڌن تي ويڪسين لڳائي سگهو ٿا:",
+                default => "For {$v}, you can get vaccinated at the following sites:",
+            };
+        } else {
+            $intro = match ($language) {
+                'ur' => 'آپ درج ذیل مراکز پر ٹیکا لگوا سکتے ہیں:',
+                'fa' => 'می‌توانید در مراکز زیر واکسن بزنید:',
+                'ps' => 'تاسو کولی شئ په لاندې مرکزونو کې واکسین ولګوئ:',
+                'sd' => 'توهان هيٺين هنڌن تي ويڪسين لڳائي سگهو ٿا:',
+                default => 'You can get vaccinated at the following sites:',
+            };
+        }
+
+        // For a vaccine-specific ask, sites that HAVE that vaccine's day first.
+        if ($vaccine !== null) {
+            usort($hits, function (array $a, array $b) use ($vaccine): int {
+                $dayOf = fn (Site $s): ?string => $vaccine === 'bcg' ? $s->bcgDay() : $s->mrDay();
+
+                return ($dayOf($a['site']) === null ? 1 : 0) <=> ($dayOf($b['site']) === null ? 1 : 0);
+            });
+        }
 
         $lines = [];
         foreach ($hits as $h) {
@@ -256,17 +316,29 @@ class SiteLocator
             $dist = isset($h['distance_km']) ? ' — '.round($h['distance_km'], 1).' km' : '';
             $line = '• '.$this->siteName($s).($area !== '' ? " ({$area})" : '').$dist;
 
-            // Vaccine session days (from the SHR UC schedule): antigen codes
-            // stay Latin (universally used on cards), the day is localized.
-            $days = [];
-            if ($bcg = $this->dayName($s->bcgDay(), $language)) {
-                $days[] = "BCG: {$bcg}";
-            }
-            if ($mr = $this->dayName($s->mrDay(), $language)) {
-                $days[] = "MR: {$mr}";
-            }
-            if (! empty($days)) {
-                $line .= ' — '.implode(' · ', $days);
+            $timing = $this->timingPhrase($s, $language);
+
+            if ($vaccine !== null) {
+                // Lead with the asked vaccine's day: "BCG صرف پیر (اوقات 9AM-2PM)".
+                $v = strtoupper($vaccine);
+                $day = $this->dayName($vaccine === 'bcg' ? $s->bcgDay() : $s->mrDay(), $language);
+                $line .= $day !== null
+                    ? " — {$v} {$only} {$day} ({$open}: ".Site::formatTime($s->openTime()).'-'.Site::formatTime($s->closeTime()).')'
+                    : " — {$open}: {$timing}";
+            } else {
+                // General ask: normal daily hours for all vaccines, then the
+                // special BCG/MR days as exceptions.
+                $line .= " — {$open}: {$timing}";
+                $days = [];
+                if ($bcg = $this->dayName($s->bcgDay(), $language)) {
+                    $days[] = "BCG {$only} {$bcg}";
+                }
+                if ($mr = $this->dayName($s->mrDay(), $language)) {
+                    $days[] = "MR {$only} {$mr}";
+                }
+                if (! empty($days)) {
+                    $line .= ' — '.implode(' · ', $days);
+                }
             }
 
             $lines[] = $line;

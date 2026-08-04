@@ -1257,7 +1257,9 @@ class ChatPipeline
         // the bulk of the latency, and removes any apology/contradiction risk).
         // The localised site list comes from SiteLocator; the tappable Google
         // Maps pins are appended from the coordinates so links are always correct.
-        $text = $this->locator->answerText($hits, $language);
+        // A BCG/MR-specific ask ("nearest site for BCG") leads with that
+        // vaccine's session day; sites are open daily for everything else.
+        $text = $this->locator->answerText($hits, $language, $this->locator->vaccineFocus($userText));
         $maps = $this->locator->mapsBlock($hits);
         if ($maps !== '') {
             $text .= "\n\n".$maps;
