@@ -48,17 +48,27 @@ class ImportSiteSchedule extends Command
                 continue;
             }
 
-            // Candidates: sites in the same (normalized) UC.
-            $ucNorm = preg_replace('/[\s\-]+/u', '', mb_strtolower($uc));
+            // Candidates: sites in the same UC, normalized the same way the
+            // locator matches areas (spacing/dash/leading-zero insensitive).
+            $areaNorm = function (string $s): string {
+                $s = preg_replace('/[\s\-]+/u', '', mb_strtolower(trim($s)));
+
+                return (string) preg_replace('/(?<!\d)0+(\d)/', '$1', (string) $s);
+            };
+            $ucNorm = $areaNorm($uc);
             $candidates = Site::query()
                 ->get()
-                ->filter(fn (Site $s): bool => preg_replace('/[\s\-]+/u', '', mb_strtolower((string) $s->union_council)) === $ucNorm);
+                ->filter(fn (Site $s): bool => $areaNorm((string) $s->union_council) === $ucNorm);
 
             // Exact normalized name match first, then closest Levenshtein within
-            // a conservative bound (handles sheet typos like "Hopsital").
+            // a TIGHT bound — it must absorb sheet typos ("Hopsital", edit
+            // distance 2) but never bridge two different facilities ("Islamia
+            // Colony" vs "Kanwari Colony", distance 7, once cross-matched).
             $target = $norm($name);
-            $match = $candidates->first(fn (Site $s): bool => $norm((string) $s->fix_site) === $target);
-            if (! $match) {
+            $matchName = null;
+            if ($candidates->first(fn (Site $s): bool => $norm((string) $s->fix_site) === $target)) {
+                $matchName = $target;
+            } else {
                 $best = null;
                 $bestDist = PHP_INT_MAX;
                 foreach ($candidates as $s) {
@@ -68,15 +78,22 @@ class ImportSiteSchedule extends Command
                         $best = $s;
                     }
                 }
-                if ($best && $bestDist <= max(3, (int) (mb_strlen($target) * 0.25))) {
-                    $match = $best;
+                if ($best && $bestDist <= max(2, (int) (mb_strlen($target) * 0.15))) {
+                    $matchName = $norm((string) $best->fix_site);
                     $fuzzy[] = "'{$name}' → '{$best->fix_site}' (edit distance {$bestDist})";
                 }
             }
 
-            if ($match) {
+            if ($matchName !== null) {
+                // A facility has MANY rows (one per outreach entry) — the
+                // session days belong to the facility, so set them on all.
+                $rowsOfFacility = $candidates->filter(
+                    fn (Site $s): bool => $norm((string) $s->fix_site) === $matchName,
+                );
                 if (! $dry) {
-                    $match->update(['bcg_day' => $bcg, 'mr_day' => $mr]);
+                    foreach ($rowsOfFacility as $s) {
+                        $s->update(['bcg_day' => $bcg, 'mr_day' => $mr]);
+                    }
                 }
                 $updated++;
             } else {

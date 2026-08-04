@@ -47,17 +47,37 @@ class SiteLocator
             $query->where('union_council', $unionCouncil);
         }
 
-        $ranked = $query->get()
+        // One entry per FACILITY: a fix site has many outreach rows (often
+        // sharing coordinates), and without collapsing them the "3 nearest
+        // sites" were frequently the same hospital three times.
+        return $query->get()
             ->map(fn (Site $s) => [
                 'site' => $s,
                 'distance_km' => $this->haversineKm($lat, $lng, (float) $s->latitude, (float) $s->longitude),
             ])
             ->sortBy('distance_km')
+            ->unique(fn (array $h): string => $this->facilityKey($h['site']))
             ->take($limit)
             ->values()
             ->all();
+    }
 
-        return $ranked;
+    /** Normalized facility identity: fix site + UC (spacing/dash/zero-insensitive). */
+    protected function facilityKey(Site $s): string
+    {
+        return $this->normalizeArea((string) $s->fix_site).'|'.$this->normalizeArea((string) $s->union_council);
+    }
+
+    /**
+     * Area/name normalizer for matching: lowercase, strip spaces and dashes,
+     * and drop leading zeros in numbers so "Islamia Colony-09" and
+     * "Islamia Colony-9" (both present in the register) compare equal.
+     */
+    protected function normalizeArea(string $s): string
+    {
+        $s = preg_replace('/[\s\-]+/u', '', mb_strtolower(trim($s)));
+
+        return (string) preg_replace('/(?<!\d)0+(\d)/', '$1', (string) $s);
     }
 
     /**
@@ -89,18 +109,18 @@ class SiteLocator
      */
     public function ucContext(string $unionCouncil, int $limit = 8): string
     {
-        // Match on a normalized union-council label (case- and spacing-
+        // Match on a normalized union-council label (case/spacing/zero-
         // insensitive) so a registered worker still gets their sites even when
-        // the stored label differs cosmetically from the site rows, e.g.
-        // "Mangopir-8" vs "Mangopir - 8".
-        $norm = fn (string $s): string => preg_replace('/[\s\-]+/u', '', mb_strtolower(trim($s)));
-        $target = $norm($unionCouncil);
+        // the stored label differs cosmetically, e.g. "Mangopir-8" vs
+        // "Mangopir - 8" or "Islamia Colony-09" vs "-9".
+        $target = $this->normalizeArea($unionCouncil);
 
         $sites = Site::query()
             ->whereNotNull('union_council')
             ->get()
-            ->filter(fn (Site $s): bool => $norm((string) $s->union_council) === $target)
+            ->filter(fn (Site $s): bool => $this->normalizeArea((string) $s->union_council) === $target)
             ->sortBy(fn (Site $s): int => $s->outreach_site && $s->outreach_site !== 'Fixed Site' ? 1 : 0)
+            ->unique(fn (Site $s): string => $this->facilityKey($s))
             ->take($limit)
             ->values();
 
@@ -127,15 +147,15 @@ class SiteLocator
      */
     public function ucHits(string $unionCouncil, int $limit = 3): array
     {
-        $norm = fn (string $s): string => preg_replace('/[\s\-]+/u', '', mb_strtolower(trim($s)));
-        $target = $norm($unionCouncil);
+        $target = $this->normalizeArea($unionCouncil);
 
         return Site::query()
             ->whereNotNull('latitude')
             ->whereNotNull('longitude')
             ->get()
-            ->filter(fn (Site $s): bool => $norm((string) $s->union_council) === $target)
+            ->filter(fn (Site $s): bool => $this->normalizeArea((string) $s->union_council) === $target)
             ->sortBy(fn (Site $s): int => $this->siteName($s) === $s->fix_site ? 0 : 1)
+            ->unique(fn (Site $s): string => $this->facilityKey($s))
             ->take($limit)
             ->map(fn (Site $s): array => ['site' => $s])
             ->values()
@@ -173,8 +193,7 @@ class SiteLocator
      */
     public function sitesInArea(string $area, int $limit = 3): array
     {
-        $norm = fn (string $s): string => preg_replace('/[\s\-]+/u', '', mb_strtolower(trim($s)));
-        $target = $norm($area);
+        $target = $this->normalizeArea($area);
         if ($target === '') {
             return [];
         }
@@ -183,10 +202,11 @@ class SiteLocator
             ->whereNotNull('latitude')
             ->whereNotNull('longitude')
             ->get()
-            ->filter(fn (Site $s): bool => $norm((string) $s->union_council) === $target
-                || $norm((string) $s->town) === $target
-                || $norm((string) $s->district) === $target)
+            ->filter(fn (Site $s): bool => $this->normalizeArea((string) $s->union_council) === $target
+                || $this->normalizeArea((string) $s->town) === $target
+                || $this->normalizeArea((string) $s->district) === $target)
             ->sortBy(fn (Site $s): int => $this->siteName($s) === $s->fix_site ? 0 : 1)
+            ->unique(fn (Site $s): string => $this->facilityKey($s))
             ->take($limit)
             ->map(fn (Site $s): array => ['site' => $s])
             ->values()
