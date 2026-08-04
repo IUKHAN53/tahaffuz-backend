@@ -268,14 +268,23 @@ class Gemini
 
     /**
      * Apply the configured thinking budget to a generationConfig block. Budget 0
-     * disables thinking (the latency win for grounded answers); -1 omits the
-     * field for models that don't accept it.
+     * disables thinking; -1 omits the field for models that don't accept it.
+     *
+     * NOTE: with thinking OFF, flash proved unreliable at following Urdu
+     * instructions — it intermittently answered clear factual questions with a
+     * canned "your question is not clear" deflection (same failure class as
+     * the voice-gender detector labeling every voice female at budget 0).
+     * A small budget fixes it. Thinking tokens count AGAINST maxOutputTokens,
+     * so the cap is raised by the budget to keep room for the actual answer.
      */
     protected function generationConfig(array $config): array
     {
         $budget = (int) config('rag.gemini.thinking_budget', 0);
         if ($budget >= 0) {
             $config['thinkingConfig'] = ['thinkingBudget' => $budget];
+            if ($budget > 0 && isset($config['maxOutputTokens'])) {
+                $config['maxOutputTokens'] += $budget;
+            }
         }
 
         return $config;
