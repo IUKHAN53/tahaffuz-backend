@@ -6,6 +6,7 @@ use App\Models\Site;
 use Filament\Actions\Action;
 use Filament\Actions\ViewAction;
 use Filament\Forms\Components\CheckboxList;
+use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TimePicker;
 use Filament\Notifications\Notification;
 use Filament\Tables\Columns\TextColumn;
@@ -56,6 +57,20 @@ class SitesTable
                     ->label('Timing')
                     ->state(fn (Site $r): string => $r->timingLabel())
                     ->icon('heroicon-o-clock')
+                    ->toggleable(),
+                TextColumn::make('vaccine_days')
+                    ->label('BCG / MR day')
+                    ->state(function (Site $r): string {
+                        $parts = [];
+                        if ($d = $r->bcgDay()) {
+                            $parts[] = 'BCG '.Site::DAY_LABELS[$d];
+                        }
+                        if ($d = $r->mrDay()) {
+                            $parts[] = 'MR '.Site::DAY_LABELS[$d];
+                        }
+
+                        return $parts ? implode(' · ', $parts) : '—';
+                    })
                     ->toggleable(),
                 TextColumn::make('coordinates')
                     ->label('Location (tap to open map)')
@@ -135,6 +150,15 @@ class SitesTable
                             ->after('break_start')
                             ->before('close_time')
                             ->requiredWith('break_start'),
+                        Select::make('bcg_day')
+                            ->label('BCG session day')
+                            ->options(Site::DAY_LABELS)
+                            ->placeholder('Not scheduled')
+                            ->helperText('BCG and MR vials are opened on fixed weekdays (SHR UC schedule).'),
+                        Select::make('mr_day')
+                            ->label('MR session day')
+                            ->options(Site::DAY_LABELS)
+                            ->placeholder('Not scheduled'),
                     ])
                     ->fillForm(fn (Site $r): array => [
                         'timing_days' => $r->timingDays(),
@@ -142,6 +166,8 @@ class SitesTable
                         'close_time' => $r->closeTime(),
                         'break_start' => $r->breakStart(),
                         'break_end' => $r->breakEnd(),
+                        'bcg_day' => $r->bcgDay(),
+                        'mr_day' => $r->mrDay(),
                     ])
                     ->action(function (array $data, Site $r): void {
                         // Normalize picker values ("H:i:s" → "HH:MM") and week order.
@@ -171,6 +197,8 @@ class SitesTable
                             'close_time' => $isDefault ? null : $close,
                             'break_start' => $breakStart,
                             'break_end' => $breakEnd,
+                            'bcg_day' => Site::normalizeDay($data['bcg_day'] ?? null),
+                            'mr_day' => Site::normalizeDay($data['mr_day'] ?? null),
                         ]);
 
                         Notification::make()

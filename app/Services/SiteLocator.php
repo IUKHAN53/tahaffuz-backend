@@ -8,6 +8,29 @@ use Illuminate\Support\Facades\Cache;
 class SiteLocator
 {
     /**
+     * Localized weekday names for the deterministic site answers. Pashto and
+     * Farsi share the Persian weekday names in common use; Sindhi has its own.
+     *
+     * @var array<string, array<string, string>>
+     */
+    public const DAY_NAMES = [
+        'en' => ['mon' => 'Monday', 'tue' => 'Tuesday', 'wed' => 'Wednesday', 'thu' => 'Thursday', 'fri' => 'Friday', 'sat' => 'Saturday', 'sun' => 'Sunday'],
+        'ur' => ['mon' => 'پیر', 'tue' => 'منگل', 'wed' => 'بدھ', 'thu' => 'جمعرات', 'fri' => 'جمعہ', 'sat' => 'ہفتہ', 'sun' => 'اتوار'],
+        'fa' => ['mon' => 'دوشنبه', 'tue' => 'سه‌شنبه', 'wed' => 'چهارشنبه', 'thu' => 'پنجشنبه', 'fri' => 'جمعه', 'sat' => 'شنبه', 'sun' => 'یکشنبه'],
+        'ps' => ['mon' => 'دوشنبه', 'tue' => 'سه‌شنبه', 'wed' => 'چهارشنبه', 'thu' => 'پنجشنبه', 'fri' => 'جمعه', 'sat' => 'شنبه', 'sun' => 'یکشنبه'],
+        'sd' => ['mon' => 'سومر', 'tue' => 'اڱارو', 'wed' => 'اربع', 'thu' => 'خميس', 'fri' => 'جمعو', 'sat' => 'ڇنڇر', 'sun' => 'آچر'],
+    ];
+
+    /** Localized weekday name for a mon..sun code (falls back to English). */
+    public function dayName(?string $code, string $language): ?string
+    {
+        if ($code === null) {
+            return null;
+        }
+
+        return self::DAY_NAMES[$language][$code] ?? self::DAY_NAMES['en'][$code] ?? null;
+    }
+    /**
      * Nearest vaccination sites to a coordinate, by great-circle distance.
      * The site table is small (~hundreds of rows), so we load the ones with
      * coordinates and rank them in PHP — no DB trig functions required.
@@ -211,7 +234,22 @@ class SiteLocator
             $s = $h['site'];
             $area = trim((string) $s->union_council);
             $dist = isset($h['distance_km']) ? ' — '.round($h['distance_km'], 1).' km' : '';
-            $lines[] = '• '.$this->siteName($s).($area !== '' ? " ({$area})" : '').$dist;
+            $line = '• '.$this->siteName($s).($area !== '' ? " ({$area})" : '').$dist;
+
+            // Vaccine session days (from the SHR UC schedule): antigen codes
+            // stay Latin (universally used on cards), the day is localized.
+            $days = [];
+            if ($bcg = $this->dayName($s->bcgDay(), $language)) {
+                $days[] = "BCG: {$bcg}";
+            }
+            if ($mr = $this->dayName($s->mrDay(), $language)) {
+                $days[] = "MR: {$mr}";
+            }
+            if (! empty($days)) {
+                $line .= ' — '.implode(' · ', $days);
+            }
+
+            $lines[] = $line;
         }
 
         return $intro."\n".implode("\n", $lines);
@@ -245,6 +283,8 @@ class SiteLocator
                 'close_time' => $s->closeTime(),
                 'break_start' => $s->breakStart(),
                 'break_end' => $s->breakEnd(),
+                'bcg_day' => $s->bcgDay(),
+                'mr_day' => $s->mrDay(),
             ];
         }, $hits);
     }

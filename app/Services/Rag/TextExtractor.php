@@ -38,10 +38,16 @@ class TextExtractor
             $parser = new PdfParser;
             $doc = $parser->parseFile($path);
             $pageCount = count($doc->getPages());
-            $text = $this->normalize($doc->getText());
-            $letters = preg_match_all('/\p{L}{3,}/u', $text);
-            if ($letters >= 50) {
-                return $text;
+            // RAG_EXTRACT_FORCE_VISION: the Urdu training modules are glyph
+            // PDFs — PdfParser "extracts" them with scrambled glyph order that
+            // still passes the letter check, so vision transcription must be
+            // forced for them. PdfParser is kept only to learn the page count.
+            if (! (bool) config('rag.extract_force_vision', false)) {
+                $text = $this->normalize($doc->getText());
+                $letters = preg_match_all('/\p{L}{3,}/u', $text);
+                if ($letters >= 50) {
+                    return $text;
+                }
             }
         } catch (\Throwable $e) {
             // Fall through to Gemini.
@@ -116,9 +122,26 @@ class TextExtractor
 
     protected function callGeminiForRange(string $url, string $b64, ?int $from, ?int $to): ?string
     {
+        // VERBATIM transcription discipline: the training modules are official
+        // medical content, so the wording must never be paraphrased, corrected,
+        // summarized, or completed from outside knowledge — only faithfully
+        // transcribed and STRUCTURED (headings marked, tables linearized row by
+        // row, page furniture and decorative images skipped).
+        $rules = 'You are transcribing an official EPI training document. Transcribe the text EXACTLY as '
+            .'written — word for word, in the original language and script (Urdu, Arabic, English). '
+            .'NEVER paraphrase, summarize, translate, "fix", or add ANY words that are not printed on the page. '
+            ."\nStructure rules:\n"
+            ."- Put every section heading/title on its own line prefixed with '## ' (the heading text itself verbatim).\n"
+            ."- Transcribe tables ROW BY ROW as lines of 'cell | cell | cell' keeping each row's cells together in "
+            ."reading order — never output a column of numbers detached from their row labels.\n"
+            ."- For numbered lists, keep each number WITH its item text on the same line.\n"
+            ."- SKIP page numbers, running headers/footers, watermarks and purely decorative images. If a figure "
+            ."carries a caption or labels, transcribe them on one line starting with 'تصویر: '.\n"
+            .'Output plain text only (the ## heading markers are the only markup). Separate pages with two newlines.';
+
         $prompt = $from === null
-            ? 'Extract ALL text from this document, page by page, preserving the original language and script (Urdu, Arabic, English, etc). Do NOT translate. Do NOT summarize. Output plain text only — no markdown, no commentary. Separate pages with two newlines.'
-            : "Extract ALL text from THIS DOCUMENT, but ONLY pages {$from} through {$to} (inclusive). Skip every page outside that range entirely. Preserve the original language and script (Urdu, Arabic, English, etc). Do NOT translate. Do NOT summarize. Output plain text only — no markdown, no commentary. Separate pages with two newlines.";
+            ? $rules
+            : "Transcribe ONLY pages {$from} through {$to} (inclusive) of this document. Skip every page outside that range entirely.\n".$rules;
 
         $payload = [
             'contents' => [[

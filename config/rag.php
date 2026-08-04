@@ -11,9 +11,10 @@ return [
     'gemini' => [
         'api_key' => env('GEMINI_API_KEY'),
         'chat_model' => env('GEMINI_CHAT_MODEL', 'gemini-2.5-flash'),
-        // Separate model for PDF text extraction. flash-lite has a much higher
-        // free-tier RPD and is enough for plain text extraction from glyph PDFs.
-        'extract_model' => env('GEMINI_EXTRACT_MODEL', 'gemini-2.5-flash-lite'),
+        // Model for PDF text extraction. Full flash — the modules are official
+        // medical content transcribed VERBATIM, so extraction quality beats
+        // quota economics (flash-lite produced scrambled tables/words).
+        'extract_model' => env('GEMINI_EXTRACT_MODEL', 'gemini-2.5-flash'),
         // Model used for voice-message transcription. Defaults to the chat model
         // for Urdu accuracy; set to flash-lite via env if free-tier quota is tight.
         'transcribe_model' => env('GEMINI_TRANSCRIBE_MODEL', env('GEMINI_CHAT_MODEL', 'gemini-2.5-flash')),
@@ -43,9 +44,14 @@ return [
         // Page-range batch size for paged PDF extraction. Keeps each Gemini
         // response under the 32K output-token cap; tune down for very heavy
         // pages (lots of Urdu text + diagrams).
-        'page_batch' => (int) env('GEMINI_PDF_PAGE_BATCH', 20),
+        'page_batch' => (int) env('GEMINI_PDF_PAGE_BATCH', 12),
         'inter_batch_delay_ms' => (int) env('GEMINI_PDF_INTER_BATCH_MS', 1500),
     ],
+
+    // Force vision transcription for PDFs even when the glyph parser returns
+    // "text" — the Urdu modules are glyph PDFs whose parser output is scrambled
+    // but passes naive letter checks. Set for the module corpus.
+    'extract_force_vision' => (bool) env('RAG_EXTRACT_FORCE_VISION', true),
 
     // Microsoft Edge "Read Aloud" neural voices via the edge-tts CLI. Free,
     // no API key, no daily quota, and the only usable source of a Pashto voice.
@@ -96,11 +102,12 @@ return [
         // Below this RRF score, treat retrieval as "no useful context" and refuse.
         'rrf_floor' => (float) env('RRF_FLOOR', 0.012),
 
-        // Full-module context. Instead of feeding 6 scattered chunks, route the
-        // query to the most relevant module(s) and feed each one's FULL text.
-        // The chunks are used only to *rank* which modules matter; the parent
-        // modules' complete content is then sent, up to the token budget.
-        'full_module' => (bool) env('RAG_FULL_MODULE', true),
+        // Full-module context (LEGACY — now off). Feeding a whole module meant
+        // the top module was always seeded regardless of budget (Module 6 ≈
+        // 95k tokens of context per question) which diluted answers and cost.
+        // The rebuilt corpus uses titled SECTION chunks, so retrieval feeds the
+        // top-K most relevant sections instead — sharper and ~10× cheaper.
+        'full_module' => (bool) env('RAG_FULL_MODULE', false),
         // How many top chunks to consider when ranking modules (routing only).
         'routing_top_k' => (int) env('RAG_ROUTING_TOP_K', 8),
         // Total module content fed per query, in (estimated) tokens. The top
@@ -125,8 +132,11 @@ return [
     ],
 
     'chunking' => [
-        'chars' => (int) env('RAG_CHUNK_CHARS', 900),
-        'overlap' => (int) env('RAG_CHUNK_OVERLAP', 120),
+        // Section-sized chunks: one titled topic section per chunk (the
+        // extractor marks headings), so a retrieved chunk is a coherent,
+        // self-contained answer source rather than an arbitrary 900-char window.
+        'chars' => (int) env('RAG_CHUNK_CHARS', 2400),
+        'overlap' => (int) env('RAG_CHUNK_OVERLAP', 200),
     ],
 
     'system_prompt_ur' => <<<'PROMPT'
@@ -232,6 +242,19 @@ PROMPT,
 - در پاسخ هرگز نام یا شماره ماژول، عنوان سند، بخش یا شماره صفحه را ننویسید.
 - کلماتی مانند «ماژول ۱»، «Module 1»، «[DOC: ...]» را اصلاً به کار نبرید.
 - اطلاعات را طوری بگویید که گویی دانش خودتان است — فقط پاسخ مستقیم بدهید.
+PROMPT,
+
+    // Appended to every system prompt. Hard grounding rule: the assistant may
+    // ONLY use the provided CONTEXT (the official training modules) — never its
+    // own general/model knowledge — so every fact it states is traceable to the
+    // client's documents, verbatim.
+    'grounding_instruction' => <<<'PROMPT'
+STRICT GROUNDING — NON-NEGOTIABLE:
+- Answer ONLY from the CONTEXT provided in this conversation. The CONTEXT is the official training material; it is the ONLY permitted source of facts.
+- NEVER use your own general knowledge, training data, or anything from outside the CONTEXT — no outside medical facts, schedules, doses, temperatures, definitions, or advice, even when you are confident they are correct, and even for well-known facts.
+- Copy every number, dose, age, temperature, duration and date EXACTLY as written in the CONTEXT. Do not convert, round, or restate them differently.
+- If the CONTEXT does not contain what is needed to answer, say you do not have that information (use the refusal style) — do NOT fill the gap from memory, do NOT guess, and do NOT give a partial answer padded with outside knowledge.
+- You may rephrase into the user's language for readability, but the FACTS must be only those present in the CONTEXT, with their meaning unchanged.
 PROMPT,
 
     // Appended to every system prompt. Tells the assistant to answer EVERY

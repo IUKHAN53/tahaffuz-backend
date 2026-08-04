@@ -516,6 +516,17 @@ class ChatPipeline
         $words = preg_split('/\s+/u', trim($userText), -1, PREG_SPLIT_NO_EMPTY) ?: [];
         $confident = (float) config('rag.retrieval.confident_score', 0.70);
         if (count($words) <= 6 && $topScore < $confident) {
+            // Reuse the SECTIONS the previous turn was grounded on (citations
+            // carry chunk ids) — not the whole parent module, which for the
+            // bigger modules meant ~95k tokens of context for a 3-word reply.
+            $reuseChunkIds = $this->priorChunkIds($chat);
+            if (! empty($reuseChunkIds)) {
+                [$ctx, $cits] = $this->buildChunkContextFor($reuseChunkIds);
+                if ($ctx !== '') {
+                    return [$ctx, $cits, false];
+                }
+            }
+            // Legacy fallback for chats whose citations predate chunk ids.
             $reuseIds = $this->priorModuleIds($chat);
             if (! empty($reuseIds)) {
                 [$ctx, $cits] = $this->buildModuleContextFor($reuseIds);
@@ -531,6 +542,63 @@ class ChatPipeline
         [$context, $citations] = $this->buildContext($hits);
 
         return [$context, $citations, false];
+    }
+
+    /**
+     * Chunk ids the previous assistant turn was grounded on — reused so a
+     * low-confidence short follow-up stays on the established topic without
+     * re-feeding an entire module.
+     *
+     * @return array<int, int>
+     */
+    protected function priorChunkIds(Chat $chat): array
+    {
+        $prev = $chat->messages()
+            ->where('role', Message::ROLE_ASSISTANT)
+            ->orderByDesc('id')
+            ->first();
+
+        if (! $prev || ! is_array($prev->citations) || empty($prev->citations)) {
+            return [];
+        }
+
+        return collect($prev->citations)
+            ->pluck('chunk_id')
+            ->filter()
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Rebuild context from explicit chunk ids (the previous turn's citations).
+     *
+     * @param  array<int, int>  $chunkIds
+     * @return array{0: string, 1: array}
+     */
+    protected function buildChunkContextFor(array $chunkIds): array
+    {
+        $chunks = Chunk::whereIn('id', $chunkIds)->orderBy('ordinal')->get();
+        $blocks = [];
+        $citations = [];
+        foreach ($chunks as $chunk) {
+            $content = trim((string) $chunk->content);
+            if ($content === '') {
+                continue;
+            }
+            $blocks[] = $content;
+            $citations[] = [
+                'chunk_id' => $chunk->id,
+                'document_id' => $chunk->document_id,
+                'document_title' => $chunk->document?->title ?? "Doc {$chunk->document_id}",
+                'ordinal' => $chunk->ordinal,
+                'reused' => true,
+                'snippet' => Str::limit($content, 240),
+            ];
+        }
+
+        return [implode("\n\n---\n\n", $blocks), $citations];
     }
 
     /**
@@ -721,6 +789,13 @@ class ChatPipeline
             'auto' => $basePrompt . "\n\nIMPORTANT: Detect the language of the user's question and respond in that SAME language. The knowledge base is in Urdu, so understand the Urdu content first, then formulate a natural response in the user's language. Do NOT translate word-by-word - provide natural, fluent responses. Supported languages include but are not limited to: Farsi/Persian, Punjabi, Arabic, Hindi, Turkish, Bengali, and others.",
             default => $basePrompt,
         };
+
+        // Hard grounding rule: facts may come ONLY from the provided CONTEXT
+        // (the official modules) — never from the model's own knowledge.
+        $grounding = trim((string) config('rag.grounding_instruction', ''));
+        if ($grounding !== '') {
+            $prompt .= "\n\n" . $grounding;
+        }
 
         // When a message bundles several questions, answer all of them in order
         // (natural prose, no lists) instead of replying to just the first.

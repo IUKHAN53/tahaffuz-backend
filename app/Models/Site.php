@@ -41,6 +41,10 @@ class Site extends Model
         // Optional mid-day break window. NULL = no break.
         'break_start',
         'break_end',
+        // Weekly vaccine session days (mon..sun). BCG and MR are multi-dose
+        // vials opened on fixed weekdays per the SHR UC schedule.
+        'bcg_day',
+        'mr_day',
     ];
 
     protected $casts = [
@@ -94,6 +98,35 @@ class Site extends Model
     public function hasBreak(): bool
     {
         return $this->breakStart() !== null && $this->breakEnd() !== null;
+    }
+
+    /** Normalize a stored/user day value to a mon..sun code, or null. */
+    public static function normalizeDay(?string $day): ?string
+    {
+        $d = mb_strtolower(trim((string) $day));
+        if (isset(self::DAY_LABELS[$d])) {
+            return $d;
+        }
+        // Accept full English day names ("Saturday", "friday ").
+        foreach (array_keys(self::DAY_LABELS) as $code) {
+            if (str_starts_with($d, $code)) {
+                return $code;
+            }
+        }
+
+        return null;
+    }
+
+    /** BCG session day code (mon..sun), or null when not scheduled. */
+    public function bcgDay(): ?string
+    {
+        return self::normalizeDay($this->bcg_day);
+    }
+
+    /** MR session day code (mon..sun), or null when not scheduled. */
+    public function mrDay(): ?string
+    {
+        return self::normalizeDay($this->mr_day);
     }
 
     /**

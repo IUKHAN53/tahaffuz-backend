@@ -5,12 +5,75 @@ namespace App\Services\Rag;
 class Chunker
 {
     /**
-     * Paragraph-aware char-windowed chunker. Splits on blank lines first; if a
-     * paragraph exceeds $size, it's hard-split with $overlap chars carried over.
+     * Section-aware chunker. The extractor marks headings with a leading
+     * "## ", so the text splits into titled topic sections first; each section
+     * becomes one chunk (heading + verbatim body) when it fits, and larger
+     * sections are paragraph-packed with the heading carried onto every piece
+     * so retrieval always knows what topic a chunk belongs to. Text without
+     * heading markers falls back to plain paragraph packing.
      *
      * @return string[]
      */
     public function chunk(string $text, int $size = 900, int $overlap = 120): array
+    {
+        $text = trim($text);
+        if ($text === '') {
+            return [];
+        }
+
+        if (preg_match('/^##\s+/mu', $text)) {
+            return $this->chunkSections($text, $size, $overlap);
+        }
+
+        return $this->chunkParagraphs($text, $size, $overlap);
+    }
+
+    /**
+     * Split on "## heading" markers; one chunk per section when it fits.
+     *
+     * @return string[]
+     */
+    protected function chunkSections(string $text, int $size, int $overlap): array
+    {
+        // Keep any preamble before the first heading as its own block.
+        $parts = preg_split('/^(?=##\s+)/mu', $text, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+        $chunks = [];
+        foreach ($parts as $section) {
+            $section = trim($section);
+            if ($section === '') {
+                continue;
+            }
+
+            if (mb_strlen($section) <= $size) {
+                $chunks[] = $section;
+
+                continue;
+            }
+
+            // Oversized section: keep the heading on every piece.
+            $heading = '';
+            $body = $section;
+            if (preg_match('/^##\s+(.+)$/mu', $section, $m)) {
+                $heading = trim($m[0]);
+                $body = trim((string) preg_replace('/^##\s+.+$/mu', '', $section, 1));
+            }
+            $bodySize = max(200, $size - mb_strlen($heading) - 2);
+            foreach ($this->chunkParagraphs($body, $bodySize, $overlap) as $piece) {
+                $chunks[] = $heading === '' ? $piece : $heading."\n".$piece;
+            }
+        }
+
+        return array_values(array_filter($chunks, fn ($c) => $this->isUseful($c)));
+    }
+
+    /**
+     * Paragraph-aware char-windowed packing (the original strategy). Splits on
+     * blank lines; a paragraph exceeding $size is hard-split with $overlap.
+     *
+     * @return string[]
+     */
+    protected function chunkParagraphs(string $text, int $size = 900, int $overlap = 120): array
     {
         $text = trim($text);
         if ($text === '') {
