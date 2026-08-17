@@ -165,15 +165,21 @@ class ChatPipeline
         }
         $history = $this->history($chat, exclude: 1);
 
-        $reply = $this->gemini->generate(
-            $this->systemPrompt($effectiveLanguage),
-            $history,
-            $userText,
-            $this->withMemory($chat, $context),
-            $this->replyInstruction($userText, $effectiveLanguage),
-        );
+        $sys = $this->systemPrompt($effectiveLanguage);
+        $ctx = $this->withMemory($chat, $context);
+        $ri = $this->replyInstruction($userText, $effectiveLanguage);
+
+        $reply = $this->gemini->generate($sys, $history, $userText, $ctx, $ri);
 
         $replyText = $this->sanitizeAnswer($reply['text']);
+
+        // The model occasionally deflects ("your question is not clear")
+        // regardless of instructions — retry once with a corrective notice;
+        // if that also deflects, fall through to the honest refusal.
+        if ($replyText !== '' && $this->isDeflection($replyText)) {
+            $reply = $this->correctiveRetry($sys, $history, $userText, $ctx, $ri);
+            $replyText = $reply['text'];
+        }
 
         if ($replyText !== '') {
             $this->storeAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn, $replyText, $citations);
@@ -276,10 +282,14 @@ class ChatPipeline
         }
         $history = $this->history($chat, exclude: 1);
 
+        $sys = $this->systemPrompt($effectiveLanguage);
+        $ctx = $this->withMemory($chat, $context);
+        $ri = $this->replyInstruction($userText, $effectiveLanguage);
+
         $full = '';
         $completed = false;
         try {
-            foreach ($this->gemini->generateStream($this->systemPrompt($effectiveLanguage), $history, $userText, $this->withMemory($chat, $context), $this->replyInstruction($userText, $effectiveLanguage)) as $delta) {
+            foreach ($this->gemini->generateStream($sys, $history, $userText, $ctx, $ri) as $delta) {
                 $full .= $delta;
                 $onDelta($delta);
             }
@@ -293,6 +303,14 @@ class ChatPipeline
         }
 
         $full = $this->sanitizeAnswer(trim($full));
+
+        // Deflection guard: the app renders the FINAL `done` content (the host
+        // buffers SSE anyway), so a corrective retry here safely replaces a
+        // "your question is not clear" stream before anyone sees it.
+        if ($completed && $full !== '' && $this->isDeflection($full)) {
+            $retry = $this->correctiveRetry($sys, $history, $userText, $ctx, $ri);
+            $full = $retry['text'];
+        }
         // Only cache answers that streamed to completion — a partial answer
         // must never become the canonical cached reply.
         if ($completed && $full !== '') {
@@ -402,15 +420,19 @@ class ChatPipeline
         }
         $history = $this->history($chat, exclude: 1);
 
-        $reply = $this->gemini->generate(
-            $this->systemPrompt($effectiveLanguage),
-            $history,
-            $transcript,
-            $context,
-            $this->replyInstruction($transcript, $effectiveLanguage),
-        );
+        $sys = $this->systemPrompt($effectiveLanguage);
+        $ri = $this->replyInstruction($transcript, $effectiveLanguage);
+
+        $reply = $this->gemini->generate($sys, $history, $transcript, $context, $ri);
 
         $replyText = $this->sanitizeAnswer($reply['text']);
+
+        // Deflection guard (see answerText): voice users must never hear
+        // "your question is not clear" either.
+        if ($replyText !== '' && $this->isDeflection($replyText)) {
+            $reply = $this->correctiveRetry($sys, $history, $transcript, $context, $ri);
+            $replyText = $reply['text'];
+        }
 
         $assistant = Message::create([
             'chat_id' => $chat->id,
@@ -497,12 +519,47 @@ class ChatPipeline
             return true;
         }
 
-        // "Unclear question / ask again / can't understand" deflections in any
-        // of our languages — every phrasing observed in production so far.
+        return $this->isDeflection($t);
+    }
+
+    /**
+     * "Unclear question / ask again / can't understand" deflections in any of
+     * our languages — every phrasing observed in production so far. The model
+     * produces these lazily a fraction of the time regardless of instructions,
+     * so they are caught deterministically and never reach users or the cache.
+     */
+    protected function isDeflection(string $content): bool
+    {
         return (bool) preg_match(
-            '/واضح نہیں|سوال دوبارہ|دوبارہ پوچھیں|سمجھ نہیں|نہیں سمجھ|not clear|unclear|rephrase|cannot understand|درک نمی|متوجه نمی|واضح نیست|دوباره بپرسید|روښانه نه|نه پوهېږم|بیا پوښتنه|واضح ناهي|سمجهه ۾ نه|ٻيهر پڇو/iu',
-            mb_substr($t, 0, 200),
+            '/واضح نہیں|سوال دوبارہ|دوبارہ پوچھیں|دوبارہ\s*واضح|سمجھ نہیں|نہیں سمجھ|not clear|unclear|rephrase|cannot understand|درک نمی|متوجه نمی|واضح نیست|دوباره بپرسید|روښانه نه|نه پوهېږم|بیا پوښتنه|واضح ناهي|سمجهه ۾ نه|ٻيهر پڇو/iu',
+            mb_substr(trim($content), 0, 240),
         );
+    }
+
+    /**
+     * Corrective second attempt after a deflection: same grounding, plus an
+     * explicit notice that the "unclear" reply was rejected. Returns sanitized
+     * text, or '' when the retry also deflected — the caller then serves the
+     * honest refusal, so users NEVER see "your question is not clear".
+     */
+    protected function correctiveRetry(string $systemPrompt, array $history, string $userText, string $context, string $replyInstruction): array
+    {
+        $reply = $this->gemini->generate(
+            $systemPrompt,
+            $history,
+            $userText,
+            $context,
+            $replyInstruction."\nNOTE: Your previous reply claimed the question was unclear — that reply was REJECTED. "
+                .'The question IS clear. Answer it now directly from the CONTEXT; if the CONTEXT does not '
+                .'cover it, say only that you do not have that information.',
+        );
+
+        $text = $this->sanitizeAnswer($reply['text']);
+        if ($text === '' || $this->isDeflection($text)) {
+            return ['text' => '', 'usage' => $reply['usage'] ?? []];
+        }
+
+        return ['text' => $text, 'usage' => $reply['usage'] ?? []];
     }
 
     /**
@@ -1445,9 +1502,11 @@ class ChatPipeline
         // for the LLM intro check (keeps short FAQ questions fast). Includes the
         // Sindhi (ڪ/ٽ letters) and Pashto spellings — "ڪولڊ چين ڇا آهي؟" was
         // slipping past the Urdu-only list and getting the intro script.
+        // NOTE: [يیي] classes — Urdu/Farsi/Sindhi mix Arabic yeh (U+064A) and
+        // Farsi yeh (U+06CC) freely, so single-spelling patterns silently miss.
         if (preg_match('/\b(polio|bcg|penta|pcv|opv|ipv|rota|measles|booster|fever|cold ?chain|temperature|vaccinat|aefi)\b'
-            .'|پولیو|ویکسین|واکسین|ويڪسين|واڪسين|خوراک|بخار|درجہ\s*حرارت|کولڈ\s*چین|ڪولڊ\s*چين|کولډ\s*چین'
-            .'|بیمار|بيمار|ٹیکہ|ٹیکے|ٽيڪو|ٽيڪا|ٽڪو|واکسین\s*مرکز|شیک\s*ٹیسٹ|شيڪ\s*ٽيسٽ|خسرہ|خسره|سرخک|شرۍ|گرمي\s*پد/iu', $text)) {
+            .'|پولیو|پول[يی]و|و[يی]کس[يی]ن|واکس[يی]ن|و[يی]ڪس[يی]ن|واڪس[يی]ن|خوراک|بخار|درج[ہه]\s*حرارت|کولڈ\s*چ[يی]ن|ڪولڊ\s*چ[يی]ن|کولډ\s*چ[يی]ن'
+            .'|ب[يی]مار|ٹ[يی]کہ|ٹ[يی]کے|ٽ[يی]ڪو|ٽ[يی]ڪا|ٽڪو|ش[يی]ک\s*ٹ[يی]سٹ|ش[يی]ڪ\s*ٽ[يی]سٽ|خسر[ہه]|سرخک|شرۍ|گرم[يی]\s*پد/iu', $text)) {
             return false;
         }
 
