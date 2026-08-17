@@ -1442,8 +1442,12 @@ class ChatPipeline
     protected function mightBeIntro(string $text): bool
     {
         // Obvious vaccine/medical question — never an introduction, so don't pay
-        // for the LLM intro check (keeps short FAQ questions fast).
-        if (preg_match('/\b(polio|bcg|penta|pcv|opv|ipv|rota|measles|booster|fever|cold ?chain|temperature|vaccinat)\b|پولیو|ویکسین|واکسین|خوراک|بخار|درجہ\s*حرارت|کولڈ\s*چین|بیمار|ٹیکہ\s*(کب|کہاں|کیوں|کتنے|لگانے)/iu', $text)) {
+        // for the LLM intro check (keeps short FAQ questions fast). Includes the
+        // Sindhi (ڪ/ٽ letters) and Pashto spellings — "ڪولڊ چين ڇا آهي؟" was
+        // slipping past the Urdu-only list and getting the intro script.
+        if (preg_match('/\b(polio|bcg|penta|pcv|opv|ipv|rota|measles|booster|fever|cold ?chain|temperature|vaccinat|aefi)\b'
+            .'|پولیو|ویکسین|واکسین|ويڪسين|واڪسين|خوراک|بخار|درجہ\s*حرارت|کولڈ\s*چین|ڪولڊ\s*چين|کولډ\s*چین'
+            .'|بیمار|بيمار|ٹیکہ|ٹیکے|ٽيڪو|ٽيڪا|ٽڪو|واکسین\s*مرکز|شیک\s*ٹیسٹ|شيڪ\s*ٽيسٽ|خسرہ|خسره|سرخک|شرۍ|گرمي\s*پد/iu', $text)) {
             return false;
         }
 
