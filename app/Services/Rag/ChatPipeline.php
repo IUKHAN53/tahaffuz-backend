@@ -802,8 +802,13 @@ class ChatPipeline
 
                     return $hits;
                 }
+                \Illuminate\Support\Facades\Log::warning('Pinecone returned ZERO hits — falling back to local hybrid', ['query' => mb_substr($query, 0, 60)]);
             } catch (Throwable $e) {
-                // Fall back to hybrid search if Pinecone fails
+                // Fall back to hybrid search — but NEVER silently: a failing
+                // Pinecone path made every affected answer garbage-grounded
+                // (wrong-topic replies and "question unclear" deflections)
+                // while looking like random model behavior.
+                \Illuminate\Support\Facades\Log::warning('Pinecone search FAILED — falling back to local hybrid', ['error' => mb_substr($e->getMessage(), 0, 300), 'query' => mb_substr($query, 0, 60)]);
             }
         }
 
