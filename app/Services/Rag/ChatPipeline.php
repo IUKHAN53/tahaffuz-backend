@@ -993,7 +993,11 @@ class ChatPipeline
         }
 
         return match ($language) {
-            'ur'  => 'جواب لازمی طور پر اردو رسم الخط میں دیں۔',
+            // Bilingual + explicit about the mismatch case: an English question
+            // with Urdu selected must still get an Urdu answer (the Urdu-only
+            // directive lost to the question's language often enough).
+            'ur'  => 'CRITICAL: The app language is URDU. Reply ONLY in Urdu script — even though this question is written in English/Latin. '
+                .'جواب لازمی طور پر صرف اردو رسم الخط میں دیں، چاہے سوال انگریزی میں ہو۔',
             'fa'  => 'CRITICAL: Reply ONLY in Persian/Farsi using Persian grammar and vocabulary — NEVER Urdu. '
                 .'Use Persian forms like «داده می‌شود، است، باید، این» — NOT Urdu forms like «دی جاتی ہے، ہے، چاہیے، یہ». '
                 .'پاسخ فقط به فارسی روان باشد، نه اردو.',
