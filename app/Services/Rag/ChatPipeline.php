@@ -26,6 +26,17 @@ class ChatPipeline
     protected ?PineconeVectorStore $pineconeStore = null;
     protected ?Whisper $whisper = null;
 
+    /**
+     * When a message asks a knowledge question AND where to go (e.g. "my child
+     * is 2.5 months old — which vaccine is due and where?"), the site locator
+     * must not short-circuit the knowledge answer. It stashes ONE nearest site
+     * here instead; the RAG answer is generated normally and the site block is
+     * appended to it. One site (not three) keeps the combined answer readable.
+     *
+     * @var array{text: string, sites: array}|null
+     */
+    protected ?array $pendingSiteBlock = null;
+
     public function __construct(
         protected Gemini $gemini,
         protected VectorStore $store,
@@ -117,7 +128,9 @@ class ChatPipeline
         }
 
         // "Where is my nearest site?" — answer from the live site data + GPS,
-        // not the training knowledge base.
+        // not the training knowledge base. A MIXED message (location + another
+        // question) stashes one site in pendingSiteBlock and falls through.
+        $this->pendingSiteBlock = null;
         if ($siteAnswer = $this->maybeSiteAnswer($chat, $userText, $effectiveLanguage, $location, $started)) {
             return $siteAnswer;
         }
@@ -128,7 +141,7 @@ class ChatPipeline
         }
 
         // Admin-curated answer (feedback loop) — fixed answers win over RAG.
-        if ($curated = CuratedAnswer::match($userText, $effectiveLanguage)) {
+        if ($this->pendingSiteBlock === null && ($curated = CuratedAnswer::match($userText, $effectiveLanguage))) {
             $assistant = Message::create([
                 'chat_id' => $chat->id,
                 'role' => Message::ROLE_ASSISTANT,
@@ -144,7 +157,8 @@ class ChatPipeline
 
         // Serve a cached answer for repeated first-turn questions (suggestion
         // cards and FAQs) — skips embed + retrieval + generation entirely.
-        if ($cached = $this->cachedAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn)) {
+        // Never when a site block is pending: those answers are location-bound.
+        if ($this->pendingSiteBlock === null && ($cached = $this->cachedAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn))) {
             $assistant = Message::create([
                 'chat_id' => $chat->id,
                 'role' => Message::ROLE_ASSISTANT,
@@ -159,7 +173,7 @@ class ChatPipeline
 
         [$context, $citations, $weak] = $this->gatherContext($chat, $userText);
 
-        if ($weak) {
+        if ($weak && $this->pendingSiteBlock === null) {
             $assistant = $this->refuse($chat, $started, language: $effectiveLanguage, userText: $userText);
             return ['message' => $assistant, 'citations' => []];
         }
@@ -169,36 +183,48 @@ class ChatPipeline
         $ctx = $this->withMemory($chat, $context);
         $ri = $this->replyInstruction($userText, $effectiveLanguage);
 
-        $reply = $this->gemini->generate($sys, $history, $userText, $ctx, $ri);
+        $replyText = '';
+        $reply = ['usage' => []];
+        if (! $weak) {
+            $reply = $this->gemini->generate($sys, $history, $userText, $ctx, $ri);
 
-        $replyText = $this->sanitizeAnswer($reply['text']);
+            $replyText = $this->sanitizeAnswer($reply['text']);
 
-        // The model occasionally deflects ("your question is not clear")
-        // regardless of instructions — retry once with a corrective notice;
-        // if that also deflects, fall through to the honest refusal.
-        if ($replyText !== '' && $this->isDeflection($replyText)) {
-            $reply = $this->correctiveRetry($sys, $history, $userText, $ctx, $ri);
-            $replyText = $reply['text'];
+            // The model occasionally deflects ("your question is not clear")
+            // regardless of instructions — retry once with a corrective notice;
+            // if that also deflects, fall through to the honest refusal.
+            if ($replyText !== '' && $this->isDeflection($replyText)) {
+                $reply = $this->correctiveRetry($sys, $history, $userText, $ctx, $ri);
+                $replyText = $reply['text'];
+            }
         }
 
-        if ($replyText !== '') {
+        // Cache only pure knowledge answers — never ones carrying a site block.
+        if ($replyText !== '' && $this->pendingSiteBlock === null) {
             $this->storeAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn, $replyText, $citations);
+        }
+        if ($replyText !== '') {
             $this->scheduleMemory($chat, $userText, $replyText);
         }
+
+        $content = $this->withPendingSites(
+            $replyText !== '' ? $replyText : $this->refusalText($effectiveLanguage, $userText),
+        );
 
         $assistant = Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_ASSISTANT,
-            'content' => $replyText !== '' ? $replyText : $this->refusalText($effectiveLanguage, $userText),
+            'content' => $content,
             'citations' => $citations,
             'meta' => ['usage' => $reply['usage'] ?? [], 'language' => $effectiveLanguage]
+                + ($this->pendingSiteBlock ? ['sites' => $this->pendingSites()] : [])
                 + ($this->lastRetrieval ? ['retrieval' => $this->lastRetrieval] : []),
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
         ]);
 
         $chat->touch();
 
-        return ['message' => $assistant, 'citations' => $citations];
+        return ['message' => $assistant, 'citations' => $citations, 'sites' => $this->pendingSites()];
     }
 
     /**
@@ -247,7 +273,9 @@ class ChatPipeline
         // Generic "working on it" status; the site/card branches refine it below.
         $onStatus('searching');
 
-        // "Where is my nearest site?" — answer from live site data + GPS.
+        // "Where is my nearest site?" — answer from live site data + GPS. A
+        // MIXED message stashes one site in pendingSiteBlock and falls through.
+        $this->pendingSiteBlock = null;
         if ($siteAnswer = $this->maybeSiteAnswer($chat, $userText, $effectiveLanguage, $location, $started, $onDelta, $onStatus)) {
             return $siteAnswer;
         }
@@ -258,7 +286,8 @@ class ChatPipeline
         }
 
         // Cached first-turn answer: emit it as a single delta — instant reply.
-        if ($cached = $this->cachedAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn)) {
+        // Never when a site block is pending (location-bound answers).
+        if ($this->pendingSiteBlock === null && ($cached = $this->cachedAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn))) {
             $onDelta($cached['content']);
             $assistant = Message::create([
                 'chat_id' => $chat->id,
@@ -274,7 +303,7 @@ class ChatPipeline
 
         [$context, $citations, $weak] = $this->gatherContext($chat, $userText);
 
-        if ($weak) {
+        if ($weak && $this->pendingSiteBlock === null) {
             $refusal = $this->refusalText($effectiveLanguage, $userText);
             $onDelta($refusal);
             $assistant = $this->refuse($chat, $started, language: $effectiveLanguage, userText: $userText);
@@ -287,49 +316,68 @@ class ChatPipeline
         $ri = $this->replyInstruction($userText, $effectiveLanguage);
 
         $full = '';
-        $completed = false;
-        try {
-            foreach ($this->gemini->generateStream($sys, $history, $userText, $ctx, $ri) as $delta) {
-                $full .= $delta;
-                $onDelta($delta);
+        $completed = true;
+        if (! $weak) {
+            $completed = false;
+            try {
+                foreach ($this->gemini->generateStream($sys, $history, $userText, $ctx, $ri) as $delta) {
+                    $full .= $delta;
+                    $onDelta($delta);
+                }
+                $completed = true;
+            } catch (Throwable $e) {
+                // If nothing streamed yet, surface the failure; otherwise keep the
+                // partial answer we already showed the user.
+                if (trim($full) === '') {
+                    throw $e;
+                }
             }
-            $completed = true;
-        } catch (Throwable $e) {
-            // If nothing streamed yet, surface the failure; otherwise keep the
-            // partial answer we already showed the user.
-            if (trim($full) === '') {
-                throw $e;
+
+            $full = $this->sanitizeAnswer(trim($full));
+
+            // Deflection guard: the app renders the FINAL `done` content (the host
+            // buffers SSE anyway), so a corrective retry here safely replaces a
+            // "your question is not clear" stream before anyone sees it.
+            if ($completed && $full !== '' && $this->isDeflection($full)) {
+                $retry = $this->correctiveRetry($sys, $history, $userText, $ctx, $ri);
+                $full = $retry['text'];
             }
-        }
-
-        $full = $this->sanitizeAnswer(trim($full));
-
-        // Deflection guard: the app renders the FINAL `done` content (the host
-        // buffers SSE anyway), so a corrective retry here safely replaces a
-        // "your question is not clear" stream before anyone sees it.
-        if ($completed && $full !== '' && $this->isDeflection($full)) {
-            $retry = $this->correctiveRetry($sys, $history, $userText, $ctx, $ri);
-            $full = $retry['text'];
         }
         // Only cache answers that streamed to completion — a partial answer
-        // must never become the canonical cached reply.
-        if ($completed && $full !== '') {
+        // must never become the canonical cached reply, and site-block answers
+        // are location-bound so they never enter the shared cache.
+        if ($completed && $full !== '' && $this->pendingSiteBlock === null) {
             $this->storeAnswer($chat, $userText, $effectiveLanguage, $isFirstTurn, $full, $citations);
+        }
+        if ($completed && $full !== '') {
             $this->scheduleMemory($chat, $userText, $full);
+        }
+
+        $content = $this->withPendingSites(
+            $full !== '' ? $full : $this->refusalText($effectiveLanguage, $userText),
+        );
+        if ($this->pendingSiteBlock !== null) {
+            // Keep the delta stream consistent with the final content (the
+            // refusal was never streamed in the weak+block case).
+            $onDelta(($full !== ''
+                ? "\n\n"
+                : $this->refusalText($effectiveLanguage, $userText)."\n\n"
+            ).$this->pendingSiteBlock['text']);
         }
 
         $assistant = Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_ASSISTANT,
-            'content' => $full !== '' ? $full : $this->refusalText($effectiveLanguage, $userText),
+            'content' => $content,
             'citations' => $citations,
-            'meta' => ['streamed' => true, 'language' => $effectiveLanguage],
+            'meta' => ['streamed' => true, 'language' => $effectiveLanguage]
+                + ($this->pendingSiteBlock ? ['sites' => $this->pendingSites()] : []),
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
         ]);
 
         $chat->touch();
 
-        return ['message' => $assistant, 'citations' => $citations];
+        return ['message' => $assistant, 'citations' => $citations, 'sites' => $this->pendingSites()];
     }
 
     /**
@@ -388,7 +436,9 @@ class ChatPipeline
             return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript, 'voice_gender' => $gender];
         }
 
-        // Spoken "where can I get vaccinated?" — answer from live site data + GPS.
+        // Spoken "where can I get vaccinated?" — answer from live site data +
+        // GPS. A MIXED message stashes one site and falls through to RAG.
+        $this->pendingSiteBlock = null;
         if ($siteAnswer = $this->maybeSiteAnswer($chat, $transcript, $effectiveLanguage, $location, $started)) {
             return $siteAnswer + ['transcript' => $transcript, 'voice_gender' => $gender];
         }
@@ -399,7 +449,7 @@ class ChatPipeline
         }
 
         // Admin-curated answer (feedback loop) wins over RAG.
-        if ($curated = CuratedAnswer::match($transcript, $effectiveLanguage)) {
+        if ($this->pendingSiteBlock === null && ($curated = CuratedAnswer::match($transcript, $effectiveLanguage))) {
             $assistant = Message::create([
                 'chat_id' => $chat->id,
                 'role' => Message::ROLE_ASSISTANT,
@@ -414,7 +464,7 @@ class ChatPipeline
 
         [$context, $citations, $weak] = $this->gatherContext($chat, $transcript);
 
-        if ($weak) {
+        if ($weak && $this->pendingSiteBlock === null) {
             $assistant = $this->refuse($chat, $started, 'voice', language: $effectiveLanguage, userText: $transcript);
             return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript, 'voice_gender' => $gender];
         }
@@ -423,29 +473,38 @@ class ChatPipeline
         $sys = $this->systemPrompt($effectiveLanguage);
         $ri = $this->replyInstruction($transcript, $effectiveLanguage);
 
-        $reply = $this->gemini->generate($sys, $history, $transcript, $context, $ri);
+        $replyText = '';
+        $reply = ['usage' => []];
+        if (! $weak) {
+            $reply = $this->gemini->generate($sys, $history, $transcript, $context, $ri);
 
-        $replyText = $this->sanitizeAnswer($reply['text']);
+            $replyText = $this->sanitizeAnswer($reply['text']);
 
-        // Deflection guard (see answerText): voice users must never hear
-        // "your question is not clear" either.
-        if ($replyText !== '' && $this->isDeflection($replyText)) {
-            $reply = $this->correctiveRetry($sys, $history, $transcript, $context, $ri);
-            $replyText = $reply['text'];
+            // Deflection guard (see answerText): voice users must never hear
+            // "your question is not clear" either.
+            if ($replyText !== '' && $this->isDeflection($replyText)) {
+                $reply = $this->correctiveRetry($sys, $history, $transcript, $context, $ri);
+                $replyText = $reply['text'];
+            }
         }
+
+        $content = $this->withPendingSites(
+            $replyText !== '' ? $replyText : $this->refusalText($effectiveLanguage, $transcript),
+        );
 
         $assistant = Message::create([
             'chat_id' => $chat->id,
             'role' => Message::ROLE_ASSISTANT,
-            'content' => $replyText !== '' ? $replyText : $this->refusalText($effectiveLanguage, $transcript),
+            'content' => $content,
             'citations' => $citations,
-            'meta' => ['usage' => $reply['usage'] ?? [], 'source' => 'voice', 'language' => $effectiveLanguage, 'voice_gender' => $gender],
+            'meta' => ['usage' => $reply['usage'] ?? [], 'source' => 'voice', 'language' => $effectiveLanguage, 'voice_gender' => $gender]
+                + ($this->pendingSiteBlock ? ['sites' => $this->pendingSites()] : []),
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
         ]);
 
         $chat->touch();
 
-        return ['message' => $assistant, 'citations' => $citations, 'transcript' => $transcript, 'voice_gender' => $gender];
+        return ['message' => $assistant, 'citations' => $citations, 'transcript' => $transcript, 'voice_gender' => $gender, 'sites' => $this->pendingSites()];
     }
 
     /**
@@ -1399,6 +1458,22 @@ class ChatPipeline
             return null;
         }
 
+        // MIXED question (location + a knowledge question): don't short-circuit
+        // — stash ONE nearest site for appending after the RAG answer, and let
+        // the normal flow answer the knowledge part. Returning null here sends
+        // the message down the regular generation path.
+        if (! empty($analysis['other_question'])) {
+            $one = [reset($hits)];
+            $text = $this->locator->answerText($one, $language, $this->locator->vaccineFocus($userText));
+            $maps = $this->locator->mapsBlock($one);
+            $this->pendingSiteBlock = [
+                'text' => $maps !== '' ? $text."\n\n".$maps : $text,
+                'sites' => $this->locator->sitesPayload($one),
+            ];
+
+            return null;
+        }
+
         // We're committed to a site answer now — refine the UI status.
         if ($onStatus) {
             $onStatus('locating');
@@ -1435,6 +1510,22 @@ class ChatPipeline
         $chat->touch();
 
         return ['message' => $assistant, 'citations' => [], 'sites' => $sites];
+    }
+
+    /** Append the stashed single-site block (mixed questions) to a reply. */
+    protected function withPendingSites(string $text): string
+    {
+        if ($this->pendingSiteBlock === null) {
+            return $text;
+        }
+
+        return ($text !== '' ? $text."\n\n" : '').$this->pendingSiteBlock['text'];
+    }
+
+    /** Structured sites for the stashed block, for the app's site cards. */
+    protected function pendingSites(): array
+    {
+        return $this->pendingSiteBlock['sites'] ?? [];
     }
 
     protected function maybeIntroduction(string $userText, ?string $language): ?string

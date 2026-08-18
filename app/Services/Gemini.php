@@ -711,11 +711,11 @@ class Gemini
      * too weak for this nuanced Urdu call); best-effort, safe default on error.
      *
      * @param  array<int, string>  $areas
-     * @return array{wants_site_location: bool, area: string}
+     * @return array{wants_site_location: bool, area: string, other_question: bool}
      */
     public function analyzeLocationQuery(string $userText, array $areas): array
     {
-        $default = ['wants_site_location' => false, 'area' => ''];
+        $default = ['wants_site_location' => false, 'area' => '', 'other_question' => false];
         $userText = trim($userText);
         if ($userText === '') {
             return $default;
@@ -726,7 +726,7 @@ class Gemini
 
         $list = implode("\n", array_map(fn ($a) => "- {$a}", $areas));
         $prompt = "You route messages for a Pakistani vaccination assistant (Urdu/English/Pashto/Sindhi). "
-            ."Return JSON {\"wants_site_location\": bool, \"area\": string}.\n\n"
+            ."Return JSON {\"wants_site_location\": bool, \"area\": string, \"other_question\": bool}.\n\n"
             ."wants_site_location = TRUE if the user wants to be told a PHYSICAL place / centre / site / "
             ."clinic to GO to in order to get vaccinated — e.g. 'where can I get vaccinated', 'I live in X "
             ."where can I get the vaccine', 'sites near X', 'share the location'. FALSE for anything else, "
@@ -736,9 +736,13 @@ class Gemini
             ."'گجرو'=a 'Gujro Zone') — return the SINGLE matching entry from KNOWN AREAS, verbatim; matching "
             ."across scripts/spellings, closest match for a broader area. The named place MAY BE FAR from "
             ."the user — return it anyway. If they name no place (or it's not listed), return empty string.\n\n"
-            ."Examples: 'قریب ترین سینٹر کہاں ہے' => wants=true, area=''. 'میں چشتی نگر میں رہتا ہوں کہاں ٹیکا "
-            ."لگے' => wants=true, area='Chishti Nagar-7'. 'ٹیکہ جسم میں کہاں لگتا ہے' => wants=false, area=''. "
-            ."'خسرہ کا ٹیکہ کب لگتا ہے' => wants=false, area=''.\n\n"
+            ."other_question = TRUE if, BESIDES the where-to-go part, the message ALSO asks something a "
+            ."knowledge base must answer — which vaccine is due, schedule/timing for an age, side effects, "
+            ."doses, etc. FALSE when the message is ONLY about finding a place.\n\n"
+            ."Examples: 'قریب ترین سینٹر کہاں ہے' => wants=true, area='', other=false. 'میں چشتی نگر میں رہتا ہوں کہاں ٹیکا "
+            ."لگے' => wants=true, area='Chishti Nagar-7', other=false. 'ٹیکہ جسم میں کہاں لگتا ہے' => wants=false, area='', other=false. "
+            ."'خسرہ کا ٹیکہ کب لگتا ہے' => wants=false, area='', other=false. "
+            ."'میرے بچے کی عمر ڈھائی ماہ ہے، کون سا ٹیکہ لگے گا اور کہاں سے لگے گا؟' => wants=true, area='', other=true.\n\n"
             ."KNOWN AREAS:\n{$list}\n\nMESSAGE: {$userText}";
 
         try {
@@ -754,8 +758,9 @@ class Gemini
                         'properties' => [
                             'wants_site_location' => ['type' => 'boolean'],
                             'area' => ['type' => 'string'],
+                            'other_question' => ['type' => 'boolean'],
                         ],
-                        'required' => ['wants_site_location', 'area'],
+                        'required' => ['wants_site_location', 'area', 'other_question'],
                     ],
                 ],
             ], maxAttempts: 2, maxWaitMs: 4000);
@@ -770,6 +775,7 @@ class Gemini
             return [
                 'wants_site_location' => (bool) ($parsed['wants_site_location'] ?? false),
                 'area' => in_array($area, $areas, true) ? $area : '', // validate
+                'other_question' => (bool) ($parsed['other_question'] ?? false),
             ];
         } catch (Throwable $e) {
             return $default;
