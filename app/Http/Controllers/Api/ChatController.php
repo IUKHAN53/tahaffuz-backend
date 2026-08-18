@@ -104,6 +104,9 @@ class ChatController extends Controller
                 // Structured vaccination sites (location answers only) — the
                 // app renders these as tappable site cards.
                 'sites' => $result['sites'] ?? [],
+                // Spoken variant of site answers (natural sentences, no
+                // bullets/links) — the app feeds this to TTS instead of content.
+                'speech_text' => $result['speech_text'] ?? null,
             ],
         ]);
     }
@@ -172,6 +175,7 @@ class ChatController extends Controller
                         'citations' => $result['citations'],
                         'latency_ms' => $result['message']->latency_ms,
                         'sites' => $result['sites'] ?? [],
+                        'speech_text' => $result['speech_text'] ?? null,
                     ],
                 ]);
             } catch (Throwable $e) {
@@ -225,6 +229,7 @@ class ChatController extends Controller
                 'citations' => $result['citations'],
                 'latency_ms' => $result['message']->latency_ms,
                 'sites' => $result['sites'] ?? [],
+                'speech_text' => $result['speech_text'] ?? null,
             ],
         ]);
     }

@@ -350,11 +350,29 @@ class TtsController extends Controller
     }
 
     /**
-     * Decide what text to actually feed the voice. All supported languages are
-     * spoken verbatim in their own script.
+     * Decide what text to actually feed the voice. Symbols the voices read
+     * aloud ("bracket", "asterisk"…) or stumble over are removed: markdown
+     * links become their label, URLs/emoji/bullets are dropped, and brackets
+     * and long dashes become comma pauses. Content words are never changed.
      */
     protected function speechText(string $text, string $lang): string
     {
-        return $text;
+        $comma = in_array($lang, ['ur', 'fa', 'ps', 'sd'], true) ? '، ' : ', ';
+
+        // Markdown links → their label; bare URLs are noise, drop them.
+        $text = (string) preg_replace('/\[([^\]]+)\]\([^)]*\)/u', '$1', $text);
+        $text = (string) preg_replace('~https?://\S+~u', ' ', $text);
+        // Bullets, markdown leftovers, and emoji (map pins etc.).
+        $text = (string) preg_replace('/[•·▪◦*_#`>|]/u', ' ', $text);
+        $text = (string) preg_replace('/[\x{1F000}-\x{1FAFF}\x{2600}-\x{27BF}\x{FE0F}\x{200D}]/u', ' ', $text);
+        // Brackets and long dashes → a natural comma pause.
+        $text = (string) preg_replace('/\s*[—–]\s*/u', $comma, $text);
+        $text = str_replace(['(', ')', '[', ']', '{', '}'], $comma, $text);
+        // Collapse the comma/space runs the replacements can leave behind.
+        $text = (string) preg_replace('/(?:[،,]\s*){2,}/u', $comma, $text);
+        $text = (string) preg_replace('/\s*([،,])\s*([۔.!؟?])/u', '$2', $text);
+        $text = (string) preg_replace('/[ \t]{2,}/u', ' ', $text);
+
+        return trim($text);
     }
 }

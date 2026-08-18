@@ -208,9 +208,9 @@ class ChatPipeline
             $this->scheduleMemory($chat, $userText, $replyText);
         }
 
-        $content = $this->withPendingSites(
-            $replyText !== '' ? $replyText : $this->refusalText($effectiveLanguage, $userText),
-        );
+        $base = $replyText !== '' ? $replyText : $this->refusalText($effectiveLanguage, $userText);
+        $content = $this->withPendingSites($base);
+        $speech = $this->speechWithPendingSites($base);
 
         $assistant = Message::create([
             'chat_id' => $chat->id,
@@ -218,14 +218,14 @@ class ChatPipeline
             'content' => $content,
             'citations' => $citations,
             'meta' => ['usage' => $reply['usage'] ?? [], 'language' => $effectiveLanguage]
-                + ($this->pendingSiteBlock ? ['sites' => $this->pendingSites()] : [])
+                + ($this->pendingSiteBlock ? ['sites' => $this->pendingSites(), 'speech' => $speech] : [])
                 + ($this->lastRetrieval ? ['retrieval' => $this->lastRetrieval] : []),
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
         ]);
 
         $chat->touch();
 
-        return ['message' => $assistant, 'citations' => $citations, 'sites' => $this->pendingSites()];
+        return ['message' => $assistant, 'citations' => $citations, 'sites' => $this->pendingSites(), 'speech_text' => $speech];
     }
 
     /**
@@ -355,9 +355,9 @@ class ChatPipeline
             $this->scheduleMemory($chat, $userText, $full);
         }
 
-        $content = $this->withPendingSites(
-            $full !== '' ? $full : $this->refusalText($effectiveLanguage, $userText),
-        );
+        $base = $full !== '' ? $full : $this->refusalText($effectiveLanguage, $userText);
+        $content = $this->withPendingSites($base);
+        $speech = $this->speechWithPendingSites($base);
         if ($this->pendingSiteBlock !== null) {
             // Keep the delta stream consistent with the final content (the
             // refusal was never streamed in the weak+block case).
@@ -373,13 +373,13 @@ class ChatPipeline
             'content' => $content,
             'citations' => $citations,
             'meta' => ['streamed' => true, 'language' => $effectiveLanguage]
-                + ($this->pendingSiteBlock ? ['sites' => $this->pendingSites()] : []),
+                + ($this->pendingSiteBlock ? ['sites' => $this->pendingSites(), 'speech' => $speech] : []),
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
         ]);
 
         $chat->touch();
 
-        return ['message' => $assistant, 'citations' => $citations, 'sites' => $this->pendingSites()];
+        return ['message' => $assistant, 'citations' => $citations, 'sites' => $this->pendingSites(), 'speech_text' => $speech];
     }
 
     /**
@@ -491,9 +491,9 @@ class ChatPipeline
             }
         }
 
-        $content = $this->withPendingSites(
-            $replyText !== '' ? $replyText : $this->refusalText($effectiveLanguage, $transcript),
-        );
+        $base = $replyText !== '' ? $replyText : $this->refusalText($effectiveLanguage, $transcript);
+        $content = $this->withPendingSites($base);
+        $speech = $this->speechWithPendingSites($base);
 
         $assistant = Message::create([
             'chat_id' => $chat->id,
@@ -501,13 +501,13 @@ class ChatPipeline
             'content' => $content,
             'citations' => $citations,
             'meta' => ['usage' => $reply['usage'] ?? [], 'source' => 'voice', 'language' => $effectiveLanguage, 'voice_gender' => $gender]
-                + ($this->pendingSiteBlock ? ['sites' => $this->pendingSites()] : []),
+                + ($this->pendingSiteBlock ? ['sites' => $this->pendingSites(), 'speech' => $speech] : []),
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
         ]);
 
         $chat->touch();
 
-        return ['message' => $assistant, 'citations' => $citations, 'transcript' => $transcript, 'voice_gender' => $gender, 'sites' => $this->pendingSites()];
+        return ['message' => $assistant, 'citations' => $citations, 'transcript' => $transcript, 'voice_gender' => $gender, 'sites' => $this->pendingSites(), 'speech_text' => $speech];
     }
 
     /**
@@ -1467,10 +1467,14 @@ class ChatPipeline
         // the message down the regular generation path.
         if (! empty($analysis['other_question'])) {
             $one = [reset($hits)];
-            $text = $this->locator->answerText($one, $language, $this->locator->vaccineFocus($userText));
+            $vaccine = $this->locator->vaccineFocus($userText);
+            $text = $this->locator->answerText($one, $language, $vaccine);
             $maps = $this->locator->mapsBlock($one);
             $this->pendingSiteBlock = [
                 'text' => $maps !== '' ? $text."\n\n".$maps : $text,
+                // Spoken variant of the same site info — natural sentences the
+                // TTS voice can read (no bullets/brackets/links).
+                'speech' => $this->locator->speechAnswer($one, $language, $vaccine),
                 'sites' => $this->locator->sitesPayload($one),
                 // The extracted non-location question ("which vaccine at 2.5
                 // months?") — used for retrieval + generation so the location
@@ -1492,11 +1496,14 @@ class ChatPipeline
         // Maps pins are appended from the coordinates so links are always correct.
         // A BCG/MR-specific ask ("nearest site for BCG") leads with that
         // vaccine's session day; sites are open daily for everything else.
-        $text = $this->locator->answerText($hits, $language, $this->locator->vaccineFocus($userText));
+        $vaccine = $this->locator->vaccineFocus($userText);
+        $text = $this->locator->answerText($hits, $language, $vaccine);
         $maps = $this->locator->mapsBlock($hits);
         if ($maps !== '') {
             $text .= "\n\n".$maps;
         }
+        // Spoken variant — what the TTS voice reads instead of the bulleted list.
+        $speech = $this->locator->speechAnswer($hits, $language, $vaccine);
 
         if ($onDelta) {
             $onDelta($text);
@@ -1511,12 +1518,12 @@ class ChatPipeline
             'role' => Message::ROLE_ASSISTANT,
             'content' => $text,
             'citations' => [],
-            'meta' => ['source' => 'location', 'language' => $language, 'sites' => $sites] + ($onDelta ? ['streamed' => true] : []),
+            'meta' => ['source' => 'location', 'language' => $language, 'sites' => $sites, 'speech' => $speech] + ($onDelta ? ['streamed' => true] : []),
             'latency_ms' => (int) ((microtime(true) - $started) * 1000),
         ]);
         $chat->touch();
 
-        return ['message' => $assistant, 'citations' => [], 'sites' => $sites];
+        return ['message' => $assistant, 'citations' => [], 'sites' => $sites, 'speech_text' => $speech];
     }
 
     /**
@@ -1539,6 +1546,22 @@ class ChatPipeline
         }
 
         return ($text !== '' ? $text."\n\n" : '').$this->pendingSiteBlock['text'];
+    }
+
+    /**
+     * The SPOKEN version of a reply that carries a site block: the knowledge
+     * answer followed by the natural-sentence site description (instead of the
+     * bulleted display list, which TTS reads out symbol by symbol). Null when
+     * there is no site block — the app then just speaks the display content.
+     */
+    protected function speechWithPendingSites(string $text): ?string
+    {
+        if ($this->pendingSiteBlock === null) {
+            return null;
+        }
+        $speech = (string) ($this->pendingSiteBlock['speech'] ?? '');
+
+        return ($text !== '' ? $text."\n\n" : '').$speech;
     }
 
     /** Structured sites for the stashed block, for the app's site cards. */

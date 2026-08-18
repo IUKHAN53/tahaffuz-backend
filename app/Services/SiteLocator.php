@@ -362,6 +362,231 @@ class SiteLocator
     }
 
     /**
+     * The SPOKEN version of a site answer — full natural sentences with no
+     * bullets, brackets, dashes, or links, so the TTS voice reads it like a
+     * person would ("the centre is open Monday to Saturday, from 9 in the
+     * morning until 2 in the afternoon; the BCG vaccine is given on Wednesday").
+     * Same data as answerText(); different rendering.
+     *
+     * @param  array<int, array{site: Site, distance_km?: float}>  $hits
+     */
+    public function speechAnswer(array $hits, string $language, ?string $vaccine = null): string
+    {
+        if (empty($hits)) {
+            return '';
+        }
+
+        // Vaccine-specific asks lead with sites that HAVE that vaccine's day.
+        if ($vaccine !== null) {
+            usort($hits, function (array $a, array $b) use ($vaccine): int {
+                $dayOf = fn (Site $s): ?string => $vaccine === 'bcg' ? $s->bcgDay() : $s->mrDay();
+
+                return ($dayOf($a['site']) === null ? 1 : 0) <=> ($dayOf($b['site']) === null ? 1 : 0);
+            });
+        }
+
+        $first = $hits[0];
+        $far = isset($first['distance_km']) && (float) $first['distance_km'] > 5.0;
+        $vName = $vaccine !== null ? $this->spokenVaccineName($vaccine, $language) : null;
+
+        $intro = match (true) {
+            $vaccine !== null => match ($language) {
+                'ur' => "{$vName} کے لیے آپ یہ مراکز استعمال کر سکتے ہیں۔",
+                'fa' => "برای {$vName} می‌توانید به این مراکز مراجعه کنید.",
+                'ps' => "د {$vName} لپاره تاسو دې مرکزونو ته ورتلی شئ.",
+                'sd' => "{$vName} لاءِ توهان هنن مرڪزن تي وڃي سگهو ٿا.",
+                default => "For {$vName}, you can go to these centres.",
+            },
+            $far => match ($language) {
+                'ur' => 'آپ کے بالکل قریب کوئی رجسٹرڈ مرکز نہیں ملا۔ سب سے قریبی مراکز یہ ہیں۔',
+                'fa' => 'مرکز ثبت‌شده‌ای خیلی نزدیک شما پیدا نشد. نزدیک‌ترین مراکز این‌ها هستند.',
+                'ps' => 'ستاسو ډېر نږدې کوم راجسټر شوی مرکز ونه موندل شو. تر ټولو نږدې دا دي.',
+                'sd' => 'توهان جي بلڪل ويجهو ڪو رجسٽرڊ مرڪز نه مليو. سڀ کان ويجها مرڪز هي آهن.',
+                default => 'No registered centre is very close to you. The nearest ones are these.',
+            },
+            default => match ($language) {
+                'ur' => 'آپ ان مراکز پر ٹیکا لگوا سکتے ہیں۔',
+                'fa' => 'می‌توانید در این مراکز واکسن بزنید.',
+                'ps' => 'تاسو په دې مرکزونو کې واکسین لګولی شئ.',
+                'sd' => 'توهان هنن مرڪزن تي ويڪسين لڳائي سگهو ٿا.',
+                default => 'You can get vaccinated at these centres.',
+            },
+        };
+
+        $parts = [$intro];
+        foreach ($hits as $h) {
+            $parts[] = $this->spokenSite($h, $language, $vaccine, $vName);
+        }
+
+        return implode(' ', array_filter($parts));
+    }
+
+    /** One site as flowing spoken sentences: name, distance, hours, vaccine days. */
+    protected function spokenSite(array $h, string $language, ?string $vaccine, ?string $vName): string
+    {
+        $s = $h['site'];
+        $name = $this->siteName($s);
+        $sentences = [];
+
+        // "Baber Hospital, about 2 kilometres from you."
+        $sentences[] = isset($h['distance_km'])
+            ? $this->spokenDistance($name, (float) $h['distance_km'], $language)
+            : match ($language) {
+                'ur' => "{$name}۔",
+                'fa', 'ps', 'sd' => "{$name}.",
+                default => "{$name}.",
+            };
+
+        // "The centre is open Monday to Saturday, from 9 in the morning to 2 in
+        // the afternoon." (+ break sentence when the site has one)
+        $names = self::DAY_NAMES[$language] ?? self::DAY_NAMES['en'];
+        $days = $s->timingDays();
+        $firstDay = $names[$days[0]] ?? '';
+        $lastDay = $names[$days[count($days) - 1]] ?? '';
+        $open = $this->spokenTime($s->openTime(), $language);
+        $close = $this->spokenTime($s->closeTime(), $language);
+        $sentences[] = count($days) >= 2
+            ? match ($language) {
+                'ur' => "یہ مرکز {$firstDay} سے {$lastDay} تک، {$open} سے {$close} تک کھلا رہتا ہے۔",
+                'fa' => "این مرکز از {$firstDay} تا {$lastDay}، از {$open} تا {$close} باز است.",
+                'ps' => "دا مرکز له {$firstDay} تر {$lastDay}، له {$open} څخه تر {$close} پورې خلاص وي.",
+                'sd' => "هي مرڪز {$firstDay} کان {$lastDay} تائين، {$open} کان {$close} تائين کليل هوندو آهي.",
+                default => "The centre is open {$firstDay} to {$lastDay}, from {$open} to {$close}.",
+            }
+            : match ($language) {
+                'ur' => "یہ مرکز صرف {$firstDay} کو، {$open} سے {$close} تک کھلا رہتا ہے۔",
+                'fa' => "این مرکز فقط {$firstDay}، از {$open} تا {$close} باز است.",
+                'ps' => "دا مرکز یوازې {$firstDay}، له {$open} څخه تر {$close} پورې خلاص وي.",
+                'sd' => "هي مرڪز صرف {$firstDay} تي، {$open} کان {$close} تائين کليل هوندو آهي.",
+                default => "The centre is open only on {$firstDay}, from {$open} to {$close}.",
+            };
+
+        if ($s->hasBreak()) {
+            $bs = $this->spokenTime((string) $s->breakStart(), $language);
+            $be = $this->spokenTime((string) $s->breakEnd(), $language);
+            $sentences[] = match ($language) {
+                'ur' => "درمیان میں {$bs} سے {$be} تک وقفہ ہوتا ہے۔",
+                'fa' => "بین {$bs} تا {$be} استراحت است.",
+                'ps' => "د {$bs} او {$be} تر منځ وقفه وي.",
+                'sd' => "وچ ۾ {$bs} کان {$be} تائين وقفو ٿيندو آهي.",
+                default => "There is a break from {$bs} to {$be}.",
+            };
+        }
+
+        // Vaccine days. A BCG/MR-specific ask gets just that vaccine's day; a
+        // general ask mentions both special days when the site has them.
+        if ($vaccine !== null) {
+            $day = $this->dayName($vaccine === 'bcg' ? $s->bcgDay() : $s->mrDay(), $language);
+            if ($day !== null) {
+                $sentences[] = match ($language) {
+                    'ur' => "{$vName} کا ٹیکہ یہاں {$day} کے دن لگتا ہے۔",
+                    'fa' => "واکسن {$vName} اینجا روز {$day} زده می‌شود.",
+                    'ps' => "د {$vName} واکسین دلته د {$day} په ورځ لګول کېږي.",
+                    'sd' => "{$vName} جي ويڪسين هتي {$day} جي ڏينهن لڳندي آهي.",
+                    default => "The {$vName} vaccine is given here on {$day}.",
+                };
+            }
+        } else {
+            $bcg = $this->dayName($s->bcgDay(), $language);
+            $mr = $this->dayName($s->mrDay(), $language);
+            $bcgName = $this->spokenVaccineName('bcg', $language);
+            $mrName = $this->spokenVaccineName('mr', $language);
+            if ($bcg !== null && $mr !== null) {
+                $sentences[] = match ($language) {
+                    'ur' => "{$bcgName} کا ٹیکہ صرف {$bcg} کو، اور {$mrName} کا ٹیکہ صرف {$mr} کو لگتا ہے۔",
+                    'fa' => "واکسن {$bcgName} فقط {$bcg} و واکسن {$mrName} فقط {$mr} زده می‌شود.",
+                    'ps' => "د {$bcgName} واکسین یوازې په {$bcg} او د {$mrName} واکسین یوازې په {$mr} لګول کېږي.",
+                    'sd' => "{$bcgName} جي ويڪسين صرف {$bcg} تي، ۽ {$mrName} جي ويڪسين صرف {$mr} تي لڳندي آهي.",
+                    default => "The {$bcgName} vaccine is given only on {$bcg}, and the {$mrName} vaccine only on {$mr}.",
+                };
+            } elseif ($bcg !== null || $mr !== null) {
+                $n = $bcg !== null ? $bcgName : $mrName;
+                $d = $bcg ?? $mr;
+                $sentences[] = match ($language) {
+                    'ur' => "{$n} کا ٹیکہ یہاں صرف {$d} کو لگتا ہے۔",
+                    'fa' => "واکسن {$n} اینجا فقط {$d} زده می‌شود.",
+                    'ps' => "د {$n} واکسین دلته یوازې په {$d} لګول کېږي.",
+                    'sd' => "{$n} جي ويڪسين هتي صرف {$d} تي لڳندي آهي.",
+                    default => "The {$n} vaccine is given here only on {$d}.",
+                };
+            }
+        }
+
+        return implode(' ', $sentences);
+    }
+
+    /** "Baber Hospital, about 2 kilometres from you." — spoken, no digits soup. */
+    protected function spokenDistance(string $name, float $km, string $language): string
+    {
+        if ($km < 0.3) {
+            return match ($language) {
+                'ur' => "{$name}، جو آپ کے بالکل قریب ہے۔",
+                'fa' => "{$name}، که خیلی نزدیک شماست.",
+                'ps' => "{$name}، چې ستاسو ډېر نږدې دی.",
+                'sd' => "{$name}، جيڪو توهان جي بلڪل ويجهو آهي.",
+                default => "{$name}, which is right next to you.",
+            };
+        }
+
+        // Whole kilometres read far better than "2 point 2 kilometres".
+        $d = $km < 1 ? null : (string) max(1, (int) round($km));
+
+        return match ($language) {
+            'ur' => $d === null ? "{$name}، جو ایک کلومیٹر سے کم فاصلے پر ہے۔" : "{$name}، جو تقریباً {$d} کلومیٹر کے فاصلے پر ہے۔",
+            'fa' => $d === null ? "{$name}، کمتر از یک کیلومتر فاصله دارد." : "{$name}، حدود {$d} کیلومتر فاصله دارد.",
+            'ps' => $d === null ? "{$name}، چې له یو کیلومتره کم لرې دی." : "{$name}، چې شاوخوا {$d} کیلومتره لرې دی.",
+            'sd' => $d === null ? "{$name}، جيڪو هڪ ڪلوميٽر کان گهٽ پنڌ تي آهي." : "{$name}، جيڪو لڳ ڀڳ {$d} ڪلوميٽر پري آهي.",
+            default => $d === null ? "{$name}, less than a kilometre away." : "{$name}, about {$d} kilometres away.",
+        };
+    }
+
+    /** "09:00" → "صبح 9 بجے" / "9 in the morning" — how a person says the time. */
+    protected function spokenTime(string $hhmm, string $language): string
+    {
+        [$h, $m] = array_map('intval', array_pad(explode(':', $hhmm), 2, '0'));
+        $h12 = $h % 12 ?: 12;
+        $clock = $m > 0 ? sprintf('%d:%02d', $h12, $m) : (string) $h12;
+
+        // Daypart word instead of AM/PM.
+        $part = match (true) {
+            $h < 12 => 0,  // morning
+            $h < 17 => 1,  // afternoon
+            $h < 20 => 2,  // evening
+            default => 3,  // night
+        };
+
+        return match ($language) {
+            'ur' => ['صبح', 'دوپہر', 'شام', 'رات'][$part]." {$clock} بجے",
+            'fa' => "{$clock} ".['صبح', 'بعدازظهر', 'عصر', 'شب'][$part],
+            'ps' => ['سهار', 'غرمې', 'ماښام', 'شپې'][$part]." {$clock} بجې",
+            'sd' => ['صبح', 'منجهند', 'شام', 'رات'][$part]." {$clock} وڳي",
+            default => "{$clock} ".['in the morning', 'in the afternoon', 'in the evening', 'at night'][$part],
+        };
+    }
+
+    /** Vaccine name the way it is SAID in each language (script, no acronym soup). */
+    protected function spokenVaccineName(string $vaccine, string $language): string
+    {
+        if ($vaccine === 'bcg') {
+            return match ($language) {
+                'ur', 'fa', 'ps' => 'بی سی جی',
+                'sd' => 'بي سي جي',
+                default => 'BCG',
+            };
+        }
+
+        // MR — say the measles name people actually use.
+        return match ($language) {
+            'ur' => 'ایم آر یعنی خسرہ',
+            'fa' => 'ام آر یعنی سرخک',
+            'ps' => 'ایم آر یعنې شرۍ',
+            'sd' => 'ايم آر',
+            // Plain "MR" — the sentences around it already say "vaccine".
+            default => 'MR',
+        };
+    }
+
+    /**
      * Structured site payload for the app's tappable site cards: name, area,
      * distance, maps link, and opening hours. `timing` is the compact display
      * label ("Mon-Sat 9AM-2PM"); the structured days/open/close fields ride
