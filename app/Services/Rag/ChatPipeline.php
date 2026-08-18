@@ -171,7 +171,8 @@ class ChatPipeline
             return ['message' => $assistant, 'citations' => $cached['citations']];
         }
 
-        [$context, $citations, $weak] = $this->gatherContext($chat, $userText);
+        $query = $this->effectiveQuery($userText);
+        [$context, $citations, $weak] = $this->gatherContext($chat, $query);
 
         if ($weak && $this->pendingSiteBlock === null) {
             $assistant = $this->refuse($chat, $started, language: $effectiveLanguage, userText: $userText);
@@ -181,12 +182,12 @@ class ChatPipeline
 
         $sys = $this->systemPrompt($effectiveLanguage);
         $ctx = $this->withMemory($chat, $context);
-        $ri = $this->replyInstruction($userText, $effectiveLanguage);
+        $ri = $this->replyInstruction($query, $effectiveLanguage);
 
         $replyText = '';
         $reply = ['usage' => []];
         if (! $weak) {
-            $reply = $this->gemini->generate($sys, $history, $userText, $ctx, $ri);
+            $reply = $this->gemini->generate($sys, $history, $query, $ctx, $ri);
 
             $replyText = $this->sanitizeAnswer($reply['text']);
 
@@ -194,7 +195,7 @@ class ChatPipeline
             // regardless of instructions — retry once with a corrective notice;
             // if that also deflects, fall through to the honest refusal.
             if ($replyText !== '' && $this->isDeflection($replyText)) {
-                $reply = $this->correctiveRetry($sys, $history, $userText, $ctx, $ri);
+                $reply = $this->correctiveRetry($sys, $history, $query, $ctx, $ri);
                 $replyText = $reply['text'];
             }
         }
@@ -301,7 +302,8 @@ class ChatPipeline
             return ['message' => $assistant, 'citations' => $cached['citations']];
         }
 
-        [$context, $citations, $weak] = $this->gatherContext($chat, $userText);
+        $query = $this->effectiveQuery($userText);
+        [$context, $citations, $weak] = $this->gatherContext($chat, $query);
 
         if ($weak && $this->pendingSiteBlock === null) {
             $refusal = $this->refusalText($effectiveLanguage, $userText);
@@ -313,14 +315,14 @@ class ChatPipeline
 
         $sys = $this->systemPrompt($effectiveLanguage);
         $ctx = $this->withMemory($chat, $context);
-        $ri = $this->replyInstruction($userText, $effectiveLanguage);
+        $ri = $this->replyInstruction($query, $effectiveLanguage);
 
         $full = '';
         $completed = true;
         if (! $weak) {
             $completed = false;
             try {
-                foreach ($this->gemini->generateStream($sys, $history, $userText, $ctx, $ri) as $delta) {
+                foreach ($this->gemini->generateStream($sys, $history, $query, $ctx, $ri) as $delta) {
                     $full .= $delta;
                     $onDelta($delta);
                 }
@@ -339,7 +341,7 @@ class ChatPipeline
             // buffers SSE anyway), so a corrective retry here safely replaces a
             // "your question is not clear" stream before anyone sees it.
             if ($completed && $full !== '' && $this->isDeflection($full)) {
-                $retry = $this->correctiveRetry($sys, $history, $userText, $ctx, $ri);
+                $retry = $this->correctiveRetry($sys, $history, $query, $ctx, $ri);
                 $full = $retry['text'];
             }
         }
@@ -462,7 +464,8 @@ class ChatPipeline
             return ['message' => $assistant, 'citations' => [], 'transcript' => $transcript, 'voice_gender' => $gender];
         }
 
-        [$context, $citations, $weak] = $this->gatherContext($chat, $transcript);
+        $query = $this->effectiveQuery($transcript);
+        [$context, $citations, $weak] = $this->gatherContext($chat, $query);
 
         if ($weak && $this->pendingSiteBlock === null) {
             $assistant = $this->refuse($chat, $started, 'voice', language: $effectiveLanguage, userText: $transcript);
@@ -471,19 +474,19 @@ class ChatPipeline
         $history = $this->history($chat, exclude: 1);
 
         $sys = $this->systemPrompt($effectiveLanguage);
-        $ri = $this->replyInstruction($transcript, $effectiveLanguage);
+        $ri = $this->replyInstruction($query, $effectiveLanguage);
 
         $replyText = '';
         $reply = ['usage' => []];
         if (! $weak) {
-            $reply = $this->gemini->generate($sys, $history, $transcript, $context, $ri);
+            $reply = $this->gemini->generate($sys, $history, $query, $context, $ri);
 
             $replyText = $this->sanitizeAnswer($reply['text']);
 
             // Deflection guard (see answerText): voice users must never hear
             // "your question is not clear" either.
             if ($replyText !== '' && $this->isDeflection($replyText)) {
-                $reply = $this->correctiveRetry($sys, $history, $transcript, $context, $ri);
+                $reply = $this->correctiveRetry($sys, $history, $query, $context, $ri);
                 $replyText = $reply['text'];
             }
         }
@@ -1469,6 +1472,10 @@ class ChatPipeline
             $this->pendingSiteBlock = [
                 'text' => $maps !== '' ? $text."\n\n".$maps : $text,
                 'sites' => $this->locator->sitesPayload($one),
+                // The extracted non-location question ("which vaccine at 2.5
+                // months?") — used for retrieval + generation so the location
+                // words don't drag retrieval to body-injection-site sections.
+                'knowledge_question' => trim((string) ($analysis['knowledge_question'] ?? '')),
             ];
 
             return null;
@@ -1510,6 +1517,18 @@ class ChatPipeline
         $chat->touch();
 
         return ['message' => $assistant, 'citations' => [], 'sites' => $sites];
+    }
+
+    /**
+     * The text to retrieve/generate against: on mixed messages, the extracted
+     * knowledge question (location words dragged retrieval off-topic —
+     * "کہاں سے لگے" matched body-injection-site sections).
+     */
+    protected function effectiveQuery(string $userText): string
+    {
+        $kq = $this->pendingSiteBlock['knowledge_question'] ?? '';
+
+        return $kq !== '' ? $kq : $userText;
     }
 
     /** Append the stashed single-site block (mixed questions) to a reply. */

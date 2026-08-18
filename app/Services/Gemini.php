@@ -711,11 +711,11 @@ class Gemini
      * too weak for this nuanced Urdu call); best-effort, safe default on error.
      *
      * @param  array<int, string>  $areas
-     * @return array{wants_site_location: bool, area: string, other_question: bool}
+     * @return array{wants_site_location: bool, area: string, other_question: bool, knowledge_question: string}
      */
     public function analyzeLocationQuery(string $userText, array $areas): array
     {
-        $default = ['wants_site_location' => false, 'area' => '', 'other_question' => false];
+        $default = ['wants_site_location' => false, 'area' => '', 'other_question' => false, 'knowledge_question' => ''];
         $userText = trim($userText);
         if ($userText === '') {
             return $default;
@@ -739,6 +739,9 @@ class Gemini
             ."other_question = TRUE if, BESIDES the where-to-go part, the message ALSO asks something a "
             ."knowledge base must answer — which vaccine is due, schedule/timing for an age, side effects, "
             ."doses, etc. FALSE when the message is ONLY about finding a place.\n\n"
+            ."knowledge_question = when other_question is true, restate that non-location question as ONE "
+            ."self-contained question in the SAME language, keeping every fact the user gave (like the "
+            ."child's age) — e.g. 'ڈھائی ماہ کے بچے کو کون سا ٹیکہ لگے گا؟'. Empty string otherwise.\n\n"
             ."Examples: 'قریب ترین سینٹر کہاں ہے' => wants=true, area='', other=false. 'میں چشتی نگر میں رہتا ہوں کہاں ٹیکا "
             ."لگے' => wants=true, area='Chishti Nagar-7', other=false. 'ٹیکہ جسم میں کہاں لگتا ہے' => wants=false, area='', other=false. "
             ."'خسرہ کا ٹیکہ کب لگتا ہے' => wants=false, area='', other=false. "
@@ -751,7 +754,9 @@ class Gemini
                 'generationConfig' => [
                     'temperature' => 0.0,
                     'thinkingConfig' => ['thinkingBudget' => 0],
-                    'maxOutputTokens' => 80,
+                    // Room for the extracted Urdu knowledge_question — a
+                    // truncated JSON falls back to safe defaults.
+                    'maxOutputTokens' => 220,
                     'responseMimeType' => 'application/json',
                     'responseSchema' => [
                         'type' => 'object',
@@ -759,8 +764,9 @@ class Gemini
                             'wants_site_location' => ['type' => 'boolean'],
                             'area' => ['type' => 'string'],
                             'other_question' => ['type' => 'boolean'],
+                            'knowledge_question' => ['type' => 'string'],
                         ],
-                        'required' => ['wants_site_location', 'area', 'other_question'],
+                        'required' => ['wants_site_location', 'area', 'other_question', 'knowledge_question'],
                     ],
                 ],
             ], maxAttempts: 2, maxWaitMs: 4000);
@@ -776,6 +782,7 @@ class Gemini
                 'wants_site_location' => (bool) ($parsed['wants_site_location'] ?? false),
                 'area' => in_array($area, $areas, true) ? $area : '', // validate
                 'other_question' => (bool) ($parsed['other_question'] ?? false),
+                'knowledge_question' => trim((string) ($parsed['knowledge_question'] ?? '')),
             ];
         } catch (Throwable $e) {
             return $default;
