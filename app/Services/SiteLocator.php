@@ -291,13 +291,27 @@ class SiteLocator
                 default => "For {$v}, you can get vaccinated at the following sites:",
             };
         } else {
-            $intro = match ($language) {
-                'ur' => 'آپ درج ذیل مراکز پر ٹیکا لگوا سکتے ہیں:',
-                'fa' => 'می‌توانید در مراکز زیر واکسن بزنید:',
-                'ps' => 'تاسو کولی شئ په لاندې مرکزونو کې واکسین ولګوئ:',
-                'sd' => 'توهان هيٺين هنڌن تي ويڪسين لڳائي سگهو ٿا:',
-                default => 'You can get vaccinated at the following sites:',
-            };
+            // When even the nearest hit is far, be honest about it — testers
+            // standing outside the covered UCs read "you can get vaccinated at
+            // [11 km away]" as a wrong answer.
+            $first = $hits[0] ?? null;
+            $far = $first !== null && isset($first['distance_km']) && (float) $first['distance_km'] > 5.0;
+
+            $intro = $far
+                ? match ($language) {
+                    'ur' => 'آپ کے بالکل قریب کوئی رجسٹرڈ مرکز نہیں ملا۔ سب سے قریبی مراکز یہ ہیں:',
+                    'fa' => 'مرکز ثبت‌شده‌ای خیلی نزدیک شما پیدا نشد. نزدیک‌ترین مراکز این‌ها هستند:',
+                    'ps' => 'ستاسو ډېر نږدې کوم راجسټر شوی مرکز ونه موندل شو. تر ټولو نږدې دا دي:',
+                    'sd' => 'توهان جي بلڪل ويجهو ڪو رجسٽرڊ مرڪز نه مليو. سڀ کان ويجها مرڪز هي آهن:',
+                    default => 'No registered site is very close to your location. The nearest ones are:',
+                }
+                : match ($language) {
+                    'ur' => 'آپ درج ذیل مراکز پر ٹیکا لگوا سکتے ہیں:',
+                    'fa' => 'می‌توانید در مراکز زیر واکسن بزنید:',
+                    'ps' => 'تاسو کولی شئ په لاندې مرکزونو کې واکسین ولګوئ:',
+                    'sd' => 'توهان هيٺين هنڌن تي ويڪسين لڳائي سگهو ٿا:',
+                    default => 'You can get vaccinated at the following sites:',
+                };
         }
 
         // For a vaccine-specific ask, sites that HAVE that vaccine's day first.

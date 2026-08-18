@@ -729,9 +729,11 @@ class Gemini
             ."Return JSON {\"wants_site_location\": bool, \"area\": string, \"other_question\": bool}.\n\n"
             ."wants_site_location = TRUE if the user wants to be told a PHYSICAL place / centre / site / "
             ."clinic to GO to in order to get vaccinated — e.g. 'where can I get vaccinated', 'I live in X "
-            ."where can I get the vaccine', 'sites near X', 'share the location'. FALSE for anything else, "
-            ."ESPECIALLY where ON THE BODY a vaccine is injected (arm/thigh/'جسم میں کہاں'), schedule/timing/"
-            ."age, doses, side effects/fever, cold chain, or general knowledge.\n\n"
+            ."where can I get the vaccine', 'sites near X', 'share the location' — OR asks about the "
+            ."OPERATING DETAILS of vaccination centres/dispensaries: which DAY a vaccine (BCG/MR) is given "
+            ."at a centre or at the centres of an area, opening hours/timings of sites. FALSE for anything "
+            ."else, ESPECIALLY where ON THE BODY a vaccine is injected (arm/thigh/'جسم میں کہاں'), the "
+            ."child's AGE schedule for a vaccine, doses, side effects/fever, cold chain, or general knowledge.\n\n"
             ."area = if the user NAMES a place — in ANY language/script (e.g. 'چشتی نگر'='Chishti Nagar-7', "
             ."'گجرو'=a 'Gujro Zone') — return the SINGLE matching entry from KNOWN AREAS, verbatim; matching "
             ."across scripts/spellings, closest match for a broader area. The named place MAY BE FAR from "
@@ -745,7 +747,10 @@ class Gemini
             ."Examples: 'قریب ترین سینٹر کہاں ہے' => wants=true, area='', other=false. 'میں چشتی نگر میں رہتا ہوں کہاں ٹیکا "
             ."لگے' => wants=true, area='Chishti Nagar-7', other=false. 'ٹیکہ جسم میں کہاں لگتا ہے' => wants=false, area='', other=false. "
             ."'خسرہ کا ٹیکہ کب لگتا ہے' => wants=false, area='', other=false. "
-            ."'میرے بچے کی عمر ڈھائی ماہ ہے، کون سا ٹیکہ لگے گا اور کہاں سے لگے گا؟' => wants=true, area='', other=true.\n\n"
+            ."'میرے بچے کی عمر ڈھائی ماہ ہے، کون سا ٹیکہ لگے گا اور کہاں سے لگے گا؟' => wants=true, area='', other=true. "
+            ."'گجروں میں جو صحت کے مراکز ہیں وہاں بی سی جی کس دن لگایا جاتا ہے؟' => wants=true, area=(the Gujro entry), other=false. "
+            ."'اس ڈسپنسری پہ بی سی جی کس دن لگتی ہے؟' => wants=true, area='', other=false. "
+            ."'بی سی جی کا ٹیکہ کب لگایا جاتا ہے؟' (age/schedule, no place mentioned) => wants=false, other=false.\n\n"
             ."KNOWN AREAS:\n{$list}\n\nMESSAGE: {$userText}";
 
         try {

@@ -1371,10 +1371,10 @@ class ChatPipeline
     protected function hasLocationHint(string $text): bool
     {
         return (bool) (
-            preg_match('/\b(where|place|location|site|cent(er|re)|clinic|hospital|near|nearest|address|markaz)\b/i', $text)
+            preg_match('/\b(where|place|location|site|cent(er|re)|clinic|hospital|dispensary|near|nearest|address|markaz)\b/i', $text)
             // Urdu / Pashto / Sindhi / Farsi place / where / get-vaccinated words.
             // Sindhi spells "where" ڪٿان/ڪاڏي and "vaccine" ويڪسين; Farsi "کجا/واکسن".
-            || preg_match('/(کہاں|کدھر|کجا|جگہ|مقام|لوکیشن|جائے|جاؤں|جانا|قریب|نزدیک|مرکز|سینٹر|کلینک|ہسپتال|سائٹ|کیمپ|لگوا|لگوانا|چیرته|چېرته|ځای|ڪٿي|ڪٿان|ڪاڏي|ويجهو|ويڪسين|لڳائ|واکسن|نږدې|درمانگاه)/u', $text)
+            || preg_match('/(کہاں|کدھر|کجا|جگہ|مقام|لوکیشن|جائے|جاؤں|جانا|قریب|نزدیک|مرکز|مراکز|سینٹر|کلینک|ہسپتال|ڈسپنسری|ڊسپنسري|سائٹ|کیمپ|لگوا|لگوانا|چیرته|چېرته|ځای|ڪٿي|ڪٿان|ڪاڏي|ويجهو|ويڪسين|لڳائ|واکسن|نږدې|درمانگاه)/u', $text)
         );
     }
 
@@ -1394,8 +1394,8 @@ class ChatPipeline
         }
 
         // Urdu/Roman/Pashto/Sindhi/Farsi: explicit site / centre / location words.
-        if (preg_match('/(لوکیشن|سائٹ|سینٹر|سنٹر|مرکز|ویکسینیشن مرکز|نزدیک|قریب|نزدیکی|قریبی|کیمپ|کلینک|نږدې|واکسین مرکز|نزدیک‌ترین|نزدیک ترین|مرکز نزدیک|ڪلينڪ|ويجهو|درمانگاه)/u', $text)
-            || preg_match('/\b(location|markaz|clinic|camp)\b/i', $text)) {
+        if (preg_match('/(لوکیشن|سائٹ|سینٹر|سنٹر|مرکز|مراکز|ویکسینیشن مرکز|نزدیک|قریب|نزدیکی|قریبی|کیمپ|کلینک|ڈسپنسری|ڊسپنسري|نږدې|واکسین مرکز|نزدیک‌ترین|نزدیک ترین|مرکز نزدیک|ڪلينڪ|ويجهو|درمانگاه)/u', $text)
+            || preg_match('/\b(location|markaz|clinic|camp|dispensary)\b/i', $text)) {
             return true;
         }
 
